@@ -329,16 +329,6 @@ async def clearhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 @check_limit
-async def quota(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    data_fetcher = context.bot_data.get("data_fetcher")
-    if data_fetcher is None:
-        msg = "📊 Quota Twelve Data\n🔢 Données non disponibles"
-    else:
-        msg = data_fetcher.quota_tracker.format_message()
-    await update.message.reply_text(msg)
-
 async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return

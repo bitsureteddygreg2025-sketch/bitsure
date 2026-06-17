@@ -8,7 +8,6 @@ import websocket
 import threading
 import pandas as pd
 
-from quota_tracker import TwelveDataQuotaTracker
 from config import (
     TWELVEDATA_API_KEY,
     PRICE_CACHE_TTL, HISTORY_CACHE_TTL,
@@ -33,7 +32,6 @@ class DataFetcher:
         self.ws = None
         self.ws_thread = None
         self.active_source = "twelve"
-        self.quota_tracker = TwelveDataQuotaTracker(daily_limit=800)
 
     @classmethod
     def get_instance(cls):
@@ -113,9 +111,6 @@ class DataFetcher:
         except Exception as e:
             logger.debug(f"Twelve WS parse error: {e}")
 
-    def _update_quota_from_response(self, response):
-        self.quota_tracker.update_from_headers(response.headers)
-
     # =========================================================
     # PRIX TEMPS RÉEL
     # =========================================================
@@ -176,7 +171,6 @@ class DataFetcher:
             interval = {"1m": "1min", "5m": "5min", "1h": "1h", "4h": "4h", "1d": "1day"}.get(timeframe, "1day")
             url = f"https://api.twelvedata.com/time_series?symbol={td_symbol}&interval={interval}&outputsize=5000&apikey={TWELVEDATA_API_KEY}"
             r = requests.get(url, timeout=10)
-            self._update_quota_from_response(r)
             if r.status_code == 200:
                 data = r.json().get("values", [])
                 if not data:

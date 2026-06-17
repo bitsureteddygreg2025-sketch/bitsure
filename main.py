@@ -78,7 +78,6 @@ from bot_handlers import (
 
 from admin_handlers import (
     deleteuser,
-    quota,
     exportsignals,
     dbquery,
     cleanwaits,
@@ -186,7 +185,6 @@ def main():
         ("refreshhistory", refreshhistory),
         ("clearhistory", clearhistory),
         ("deleteuser", deleteuser),
-        ("quota", quota),
         ("exportsignals", exportsignals),
         ("dbquery", dbquery),
         ("cleanwaits", cleanwaits),
