@@ -1,9 +1,0 @@
-__pycache__/  
-*.pyc  
-/data/  
-*.json  
-.env  
-*.log  
-*.tmp  
-.DS_Store  
-Thumbs.db 
