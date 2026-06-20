@@ -306,17 +306,6 @@ def main():
             drop_pending_updates=True
         )
 # =========================================================
-# INTERNAL API FOR TEDDY-WEB
-# =========================================================
-import threading
-from api_internal import app as api_app
-
-def start_internal_api():
-    api_app.run(host="0.0.0.0", port=9000, debug=False)
-
-threading.Thread(target=start_internal_api, daemon=True).start()
-
-# =========================================================
 # ENTRYPOINT
 # =========================================================
 
