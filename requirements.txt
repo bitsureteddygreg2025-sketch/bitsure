@@ -6,3 +6,4 @@ websocket-client==1.7.0
 pandas==2.1.4
 numpy==1.26.2
 openai
+psycopg2-binary
