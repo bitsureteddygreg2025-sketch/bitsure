@@ -35,9 +35,9 @@ class UserManager:
     # =========================================================
 
     def get_user(self, user_id: int) -> Optional[Dict]:
-        """Récupère un utilisateur depuis PostgreSQL, ou le crée si autorisé."""
+        """Récupère un utilisateur depuis SQLite, ou le crée si autorisé."""
         row = self.conn.execute(
-            "SELECT * FROM users WHERE user_id = %s", (user_id,)
+            "SELECT * FROM users WHERE user_id = ?", (user_id,)
         ).fetchone()
 
         if row:
@@ -50,7 +50,7 @@ class UserManager:
         self.conn.execute(
             """
             INSERT INTO users (user_id, role, lang, timeframe, risk, terms_accepted, trial_start, created_at, approved, username)
-            VALUES (%s, 'tester', 'en', '1h', 'medium', 0, %s, %s, 0, %s)
+            VALUES (?, 'tester', 'en', '1h', 'medium', 0, ?, ?, 0, ?)
             """,
             (user_id, now, now, None)
         )
@@ -63,7 +63,7 @@ class UserManager:
 
     def user_exists(self, user_id: int) -> bool:
         row = self.conn.execute(
-            "SELECT 1 FROM users WHERE user_id = %s", (user_id,)
+            "SELECT 1 FROM users WHERE user_id = ?", (user_id,)
         ).fetchone()
         return row is not None
 
@@ -112,7 +112,7 @@ class UserManager:
         except (TypeError, ValueError):
             start = time.time()
             self.conn.execute(
-                "UPDATE users SET trial_start = %s WHERE user_id = %s",
+                "UPDATE users SET trial_start = ? WHERE user_id = ?",
                 (start, user_id)
             )
             self.conn.commit()
@@ -131,12 +131,12 @@ class UserManager:
 
     def update_username(self, user_id: int, username: str):
         if username:
-            self.conn.execute("UPDATE users SET username = %s WHERE user_id = %s", (username, user_id))
+            self.conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
             self.conn.commit()
 
     def accept_terms(self, user_id: int):
         self.conn.execute(
-            "UPDATE users SET terms_accepted = 1 WHERE user_id = %s",
+            "UPDATE users SET terms_accepted = 1 WHERE user_id = ?",
             (user_id,)
         )
         self.conn.commit()
@@ -151,7 +151,7 @@ class UserManager:
     def _get_usage(self, user_id: int) -> int:
         today = self._get_today()
         row = self.conn.execute(
-            "SELECT count FROM usage WHERE user_id = %s AND date = %s",
+            "SELECT count FROM usage WHERE user_id = ? AND date = ?",
             (user_id, today)
         ).fetchone()
         return row["count"] if row else 0
@@ -160,7 +160,7 @@ class UserManager:
         today = self._get_today()
         self.conn.execute(
             """
-            INSERT INTO usage (user_id, date, count) VALUES (%s, %s, %s)
+            INSERT INTO usage (user_id, date, count) VALUES (?, ?, ?)
             ON CONFLICT(user_id, date) DO UPDATE SET count = excluded.count
             """,
             (user_id, today, count)
@@ -191,7 +191,7 @@ class UserManager:
 
     def get_watchlist(self, user_id: int) -> List[str]:
         rows = self.conn.execute(
-            "SELECT symbol FROM watchlist WHERE user_id = %s",
+            "SELECT symbol FROM watchlist WHERE user_id = ?",
             (user_id,)
         ).fetchall()
         return [row["symbol"] for row in rows]
@@ -211,7 +211,7 @@ class UserManager:
             return False, limit
         try:
             self.conn.execute(
-                "INSERT INTO watchlist (user_id, symbol) VALUES (%s, %s) ON CONFLICT (user_id, symbol) DO NOTHING",
+                "INSERT INTO watchlist (user_id, symbol) VALUES (?, ?)",
                 (user_id, symbol.upper())
             )
             self.conn.commit()
@@ -221,7 +221,7 @@ class UserManager:
 
     def remove_from_watchlist(self, user_id: int, symbol: str):
         self.conn.execute(
-            "DELETE FROM watchlist WHERE user_id = %s AND symbol = %s",
+            "DELETE FROM watchlist WHERE user_id = ? AND symbol = ?",
             (user_id, symbol.upper())
         )
         self.conn.commit()
@@ -232,7 +232,7 @@ class UserManager:
 
     def get_setting(self, user_id: int, key: str, default=None):
         row = self.conn.execute(
-            "SELECT value FROM settings WHERE user_id = %s AND key = %s",
+            "SELECT value FROM settings WHERE user_id = ? AND key = ?",
             (user_id, key)
         ).fetchone()
         return row["value"] if row else default
@@ -240,7 +240,7 @@ class UserManager:
     def set_setting(self, user_id: int, key: str, value):
         self.conn.execute(
             """
-            INSERT INTO settings (user_id, key, value) VALUES (%s, %s, %s)
+            INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)
             ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
             """,
             (user_id, key, str(value))
@@ -262,7 +262,7 @@ class UserManager:
             return False, "User not found"
         new_trial = user.get("trial_start", time.time()) - promos[code]["days"] * 86400
         self.conn.execute(
-            "UPDATE users SET trial_start = %s WHERE user_id = %s",
+            "UPDATE users SET trial_start = ? WHERE user_id = ?",
             (new_trial, user_id)
         )
         self.conn.commit()
@@ -287,7 +287,7 @@ class UserManager:
         if not user:
             return False
         self.conn.execute(
-            "UPDATE users SET role = 'pro' WHERE user_id = %s",
+            "UPDATE users SET role = 'pro' WHERE user_id = ?",
             (user_id,)
         )
         self.conn.commit()
@@ -303,7 +303,7 @@ class UserManager:
         if not user:
             return False
         self.conn.execute(
-            "UPDATE users SET role = 'tester', approved = 1 WHERE user_id = %s",
+            "UPDATE users SET role = 'tester', approved = 1 WHERE user_id = ?",
             (user_id,)
         )
         self.conn.commit()
@@ -316,7 +316,7 @@ class UserManager:
     def find_user_by_memo(self, memo: str) -> Optional[int]:
         """Retrouve un user_id à partir de son mémo de paiement Binance."""
         row = self.conn.execute(
-            "SELECT user_id FROM users WHERE memo = %s",
+            "SELECT user_id FROM users WHERE memo = ?",
             (memo,)
         ).fetchone()
         return row["user_id"] if row else None
@@ -330,13 +330,13 @@ class UserManager:
         user = self.get_user(user_id)
         if not user:
             return False
-        self.conn.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM usage WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM settings WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM watchlist WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM alerts WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM signals WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM paper_positions WHERE user_id = %s", (user_id,))
-        self.conn.execute("DELETE FROM paper_capitals WHERE user_id = %s", (user_id,))
+        self.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM usage WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM settings WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM watchlist WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM alerts WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM signals WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM paper_positions WHERE user_id = ?", (user_id,))
+        self.conn.execute("DELETE FROM paper_capitals WHERE user_id = ?", (user_id,))
         self.conn.commit()
         return True

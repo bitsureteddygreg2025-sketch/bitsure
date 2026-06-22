@@ -61,11 +61,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Compter les requêtes du jour
         from datetime import datetime
         today = datetime.utcnow().strftime("%Y-%m-%d")
-        usage_row = user_mgr.conn.execute("SELECT count FROM usage WHERE user_id = %s AND date = %s", (uid, today)).fetchone()
+        usage_row = user_mgr.conn.execute("SELECT count FROM usage WHERE user_id=? AND date=?", (uid, today)).fetchone()
         used = usage_row["count"] if usage_row else 0
         
         # Compter les signaux
-        sig_row = user_mgr.conn.execute("SELECT COUNT(*) as c FROM signals WHERE user_id = %s", (uid,)).fetchone()
+        sig_row = user_mgr.conn.execute("SELECT COUNT(*) as c FROM signals WHERE user_id=?", (uid,)).fetchone()
         sig_count = sig_row["c"] if sig_row else 0
         
         emoji = "💎" if role == "pro" else "🧪" if role == "tester" else "👤"

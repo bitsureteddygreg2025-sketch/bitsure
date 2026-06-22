@@ -64,54 +64,18 @@ class PaperTrader:
         for uid, plist in self.positions.items():
             for p in plist:
                 self.conn.execute(
-                    """
-                    INSERT INTO paper_positions (id, user_id, symbol, entry_price, sl, tp, qty, current_price, pnl_usdt, pnl_pct, status, opened_at, peak_price)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        user_id = excluded.user_id,
-                        symbol = excluded.symbol,
-                        entry_price = excluded.entry_price,
-                        sl = excluded.sl,
-                        tp = excluded.tp,
-                        qty = excluded.qty,
-                        current_price = excluded.current_price,
-                        pnl_usdt = excluded.pnl_usdt,
-                        pnl_pct = excluded.pnl_pct,
-                        status = excluded.status,
-                        opened_at = excluded.opened_at,
-                        peak_price = excluded.peak_price
-                    """,
+                    "INSERT OR REPLACE INTO paper_positions (id, user_id, symbol, entry_price, sl, tp, qty, current_price, pnl_usdt, pnl_pct, status, opened_at, peak_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (p["id"], int(uid), p["symbol"], p["entry_price"], p["sl"], p["tp"], p["qty"], p["current_price"], p["pnl_usdt"], p["pnl_pct"], p["status"], p["opened_at"], p.get("peak_price", p["entry_price"]))
                 )
         for uid, plist in self.closed_positions.items():
             for p in plist:
                 self.conn.execute(
-                    """
-                    INSERT INTO paper_positions (id, user_id, symbol, entry_price, sl, tp, qty, current_price, pnl_usdt, pnl_pct, status, opened_at, closed_at, exit_reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        user_id = excluded.user_id,
-                        symbol = excluded.symbol,
-                        entry_price = excluded.entry_price,
-                        sl = excluded.sl,
-                        tp = excluded.tp,
-                        qty = excluded.qty,
-                        current_price = excluded.current_price,
-                        pnl_usdt = excluded.pnl_usdt,
-                        pnl_pct = excluded.pnl_pct,
-                        status = excluded.status,
-                        opened_at = excluded.opened_at,
-                        closed_at = excluded.closed_at,
-                        exit_reason = excluded.exit_reason
-                    """,
+                    "INSERT OR REPLACE INTO paper_positions (id, user_id, symbol, entry_price, sl, tp, qty, current_price, pnl_usdt, pnl_pct, status, opened_at, closed_at, exit_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (p["id"], int(uid), p["symbol"], p["entry_price"], p["sl"], p["tp"], p["qty"], p["current_price"], p["pnl_usdt"], p["pnl_pct"], "closed", p["opened_at"], p["closed_at"], p["exit_reason"])
                 )
         for uid, capital in self.capitals.items():
             self.conn.execute(
-                """
-                INSERT INTO paper_capitals (user_id, capital) VALUES (%s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET capital = excluded.capital
-                """,
+                "INSERT OR REPLACE INTO paper_capitals (user_id, capital) VALUES (?,?)",
                 (int(uid), capital)
             )
         self.conn.commit()

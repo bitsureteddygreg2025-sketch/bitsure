@@ -1,6 +1,6 @@
 """
 Gestionnaire d'historique des signaux pour Bitsure Teddy.
-Stockage PostgreSQL uniquement.
+Stockage SQLite uniquement.
 """
 
 import hashlib
@@ -58,21 +58,7 @@ class HistoryManager:
         signal_id = hashlib.md5(f"{symbol}{direction}{price}{timeframe}{time.time()}".encode()).hexdigest()[:8]
         now = time.time()
         self.conn.execute(
-            """
-            INSERT INTO signals (id, symbol, direction, entry_price, sl, tp, score, status, result_pct, created_at, user_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                symbol = excluded.symbol,
-                direction = excluded.direction,
-                entry_price = excluded.entry_price,
-                sl = excluded.sl,
-                tp = excluded.tp,
-                score = excluded.score,
-                status = excluded.status,
-                result_pct = excluded.result_pct,
-                created_at = excluded.created_at,
-                user_id = excluded.user_id
-            """,
+            "INSERT OR REPLACE INTO signals (id, symbol, direction, entry_price, sl, tp, score, status, result_pct, created_at, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (signal_id, symbol.upper(), direction, price, sl, tp, score, "pending", None, now, user_id)
         )
         self.conn.commit()
@@ -84,13 +70,13 @@ class HistoryManager:
 
     def get_recent_signals(self, limit: int = 10, user_id: int = None) -> List[Dict]:
         if user_id:
-            rows = self.conn.execute("SELECT * FROM signals WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit)).fetchall()
+            rows = self.conn.execute("SELECT * FROM signals WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit)).fetchall()
         else:
-            rows = self.conn.execute("SELECT * FROM signals ORDER BY created_at DESC LIMIT %s", (limit,)).fetchall()
+            rows = self.conn.execute("SELECT * FROM signals ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def get_signal_by_id(self, signal_id: str) -> Optional[Dict]:
-        row = self.conn.execute("SELECT * FROM signals WHERE id = %s", (signal_id,)).fetchone()
+        row = self.conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
         return self._row_to_dict(row) if row else None
 
     # =========================================================
@@ -101,7 +87,7 @@ class HistoryManager:
         """Met à jour le statut d'un signal avec le PnL% et l'heure de clôture."""
         result_pct = max(-100, min(400, result_pct))
         self.conn.execute(
-            "UPDATE signals SET status = %s, result_pct = %s, closed_at = %s WHERE id = %s",
+            "UPDATE signals SET status=?, result_pct=?, closed_at=? WHERE id=?",
             (status, result_pct, time.time(), signal_id)
         )
         self.conn.commit()
@@ -150,6 +136,6 @@ class HistoryManager:
 
     def clear_old_signals(self, days: int = 30):
         cutoff = time.time() - (days * 86400)
-        self.conn.execute("DELETE FROM signals WHERE created_at < %s", (cutoff,))
+        self.conn.execute("DELETE FROM signals WHERE created_at < ?", (cutoff,))
         self.conn.commit()
         logger.info(f"✅ Signaux de plus de {days} jours supprimés")

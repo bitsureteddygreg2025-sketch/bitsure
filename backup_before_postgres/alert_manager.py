@@ -31,14 +31,14 @@ class AlertManager:
     def _init_table(self):
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS alerts (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 condition TEXT NOT NULL,
-                price DOUBLE PRECISION NOT NULL,
+                price REAL NOT NULL,
                 triggered INTEGER DEFAULT 0,
-                created_at DOUBLE PRECISION DEFAULT 0,
-                triggered_at DOUBLE PRECISION DEFAULT 0
+                created_at REAL DEFAULT 0,
+                triggered_at REAL DEFAULT 0
             )
         """)
         self.conn.commit()
@@ -110,7 +110,7 @@ class AlertManager:
                             triggered_at = time.time()
                             with self.lock:
                                 self.conn.execute(
-                                    "UPDATE alerts SET triggered = 1, triggered_at = %s WHERE id = %s",
+                                    "UPDATE alerts SET triggered = 1, triggered_at = ? WHERE id = ?",
                                     (triggered_at, alert_id)
                                 )
                                 self.conn.commit()
@@ -174,7 +174,7 @@ class AlertManager:
         with self.lock:
             # Compter les alertes actives
             active = self.conn.execute(
-                "SELECT COUNT(*) as c FROM alerts WHERE user_id = %s AND triggered = 0",
+                "SELECT COUNT(*) as c FROM alerts WHERE user_id = ? AND triggered = 0",
                 (user_id,)
             ).fetchone()
             limit = self.get_alert_limit(user_id)
@@ -185,13 +185,12 @@ class AlertManager:
             cursor = self.conn.execute(
                 """
                 INSERT INTO alerts (user_id, symbol, condition, price, triggered, created_at, triggered_at)
-                VALUES (%s, %s, %s, %s, 0, %s, 0)
-                RETURNING id
-            """,
+                VALUES (?, ?, ?, ?, 0, ?, 0)
+                """,
                 (user_id, symbol, condition, float(price), now)
             )
-            alert_id = cursor.fetchone()["id"]
             self.conn.commit()
+            alert_id = cursor.lastrowid
             return True, alert_id
 
     # =========================================================
@@ -200,7 +199,7 @@ class AlertManager:
 
     def get_alerts(self, user_id: int) -> List[Dict]:
         rows = self.conn.execute(
-            "SELECT * FROM alerts WHERE user_id = %s ORDER BY created_at DESC",
+            "SELECT * FROM alerts WHERE user_id = ? ORDER BY created_at DESC",
             (int(user_id),)
         ).fetchall()
         return [dict(r) for r in rows]
@@ -212,7 +211,7 @@ class AlertManager:
     def delete_alert(self, user_id: int, alert_id: int) -> bool:
         with self.lock:
             cursor = self.conn.execute(
-                "DELETE FROM alerts WHERE id = %s AND user_id = %s",
+                "DELETE FROM alerts WHERE id = ? AND user_id = ?",
                 (alert_id, int(user_id))
             )
             self.conn.commit()
@@ -225,7 +224,7 @@ class AlertManager:
     def clear_alerts(self, user_id: int):
         with self.lock:
             self.conn.execute(
-                "DELETE FROM alerts WHERE user_id = %s",
+                "DELETE FROM alerts WHERE user_id = ?",
                 (int(user_id),)
             )
             self.conn.commit()
@@ -248,7 +247,7 @@ class AlertManager:
     def mark_triggered(self, alert_id: int) -> bool:
         with self.lock:
             cursor = self.conn.execute(
-                "UPDATE alerts SET triggered = 1, triggered_at = %s WHERE id = %s AND triggered = 0",
+                "UPDATE alerts SET triggered = 1, triggered_at = ? WHERE id = ? AND triggered = 0",
                 (time.time(), alert_id)
             )
             self.conn.commit()
@@ -262,7 +261,7 @@ class AlertManager:
         cutoff = time.time() - (older_than_hours * 3600)
         with self.lock:
             self.conn.execute(
-                "DELETE FROM alerts WHERE triggered = 1 AND triggered_at < %s",
+                "DELETE FROM alerts WHERE triggered = 1 AND triggered_at < ?",
                 (cutoff,)
             )
             self.conn.commit()

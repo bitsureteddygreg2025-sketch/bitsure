@@ -397,7 +397,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif cmd == "historique_clear":
             uid = update.effective_user.id
-            history_mgr.conn.execute("DELETE FROM signals WHERE user_id = %s", (uid,))
+            history_mgr.conn.execute("DELETE FROM signals WHERE user_id = ?", (uid,))
             history_mgr.conn.commit()
             await query.message.reply_text("🗑️ Your history has been cleared.")
 
@@ -725,15 +725,15 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callb
                        adx=ind.get('adx') if pd.notna(ind.get('adx')) else 0.0, adx_state=adx_state,
                        sma20=format_number(ind['sma20']), sma50=format_number(ind['sma50']),
                        teddy_score=result['teddy_score'])
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = ? AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = ? AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = ? AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
