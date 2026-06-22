@@ -1,0 +1,432 @@
+# Mission
+
+Tu es un agent de développement autonome. Tu dois terminer la migration complète de **Bitsure Teddy** de SQLite vers PostgreSQL.
+
+Le projet est composé de **deux repositories** :
+
+* Repository 1 : **Web** (migration déjà partiellement effectuée)
+* Repository 2 : **Bot Telegram** (migration à effectuer)
+
+Le but est que **les deux services utilisent exactement la même base PostgreSQL Railway** via la variable d'environnement `DATABASE_URL`.
+
+Tu ne dois poser **aucune question**. Tu dois analyser les deux repositories, effectuer toutes les modifications nécessaires, vérifier qu'elles fonctionnent puis créer les commits Git.
+
+---
+
+# IMPORTANT
+
+Commence par analyser entièrement les deux repositories afin de comprendre :
+
+* l'architecture
+* les modèles de données
+* les accès à la base
+* les fichiers déjà migrés
+* les fichiers restant à migrer
+
+Le repository Web a déjà reçu une partie de la migration.
+
+Tu dois donc :
+
+* vérifier ce qui a déjà été fait
+* corriger les éventuelles incohérences
+* terminer uniquement ce qui manque
+
+Le repository Bot doit être entièrement migré.
+
+Les deux repositories doivent utiliser exactement la même logique PostgreSQL.
+
+---
+
+# Étape 0 — Backup
+
+Avant toute modification :
+
+Créer un dossier :
+
+```
+backup_before_postgres/
+```
+
+Y copier tous les fichiers qui seront modifiés.
+
+Ne jamais modifier un fichier sans sauvegarde.
+
+---
+
+# Étape 1 — Installer les dépendances
+
+Installer si nécessaire :
+
+```bash
+pip install psycopg2-binary
+```
+
+Mettre à jour également les fichiers de dépendances (`requirements.txt`, `pyproject.toml`, etc.) si nécessaire.
+
+---
+
+# Étape 2 — Créer le script de migration
+
+Créer :
+
+```
+migrate_to_postgres.py
+```
+
+Le script doit :
+
+* lire SQLite
+
+```
+data/bitsure.db
+```
+
+* lire la variable
+
+```
+DATABASE_URL
+```
+
+* créer toutes les tables PostgreSQL
+
+* recopier toutes les données
+
+* conserver les clés primaires
+
+* conserver les IDs
+
+* conserver les timestamps
+
+* vérifier le nombre de lignes importées
+
+* afficher un rapport final
+
+Exemple :
+
+```
+users : OK (253 lignes)
+
+alerts : OK (420 lignes)
+
+signals : OK (...)
+
+Migration successful
+```
+
+---
+
+# Les tables PostgreSQL doivent être équivalentes à :
+
+```sql
+CREATE TABLE users (
+user_id BIGINT PRIMARY KEY,
+role TEXT DEFAULT 'tester',
+lang TEXT DEFAULT 'en',
+timeframe TEXT DEFAULT '1h',
+risk TEXT DEFAULT 'medium',
+terms_accepted INTEGER DEFAULT 0,
+trial_start DOUBLE PRECISION DEFAULT 0,
+created_at DOUBLE PRECISION DEFAULT 0,
+approved INTEGER DEFAULT 0,
+memo TEXT,
+username TEXT,
+pin TEXT
+);
+
+CREATE TABLE usage (
+user_id BIGINT,
+date TEXT,
+count INTEGER DEFAULT 0,
+PRIMARY KEY(user_id,date)
+);
+
+CREATE TABLE settings (
+user_id BIGINT,
+key TEXT,
+value TEXT,
+PRIMARY KEY(user_id,key)
+);
+
+CREATE TABLE watchlist (
+user_id BIGINT,
+symbol TEXT,
+PRIMARY KEY(user_id,symbol)
+);
+
+CREATE TABLE alerts (
+id SERIAL PRIMARY KEY,
+user_id BIGINT,
+symbol TEXT,
+condition TEXT,
+price DOUBLE PRECISION,
+triggered INTEGER DEFAULT 0,
+created_at DOUBLE PRECISION DEFAULT 0,
+triggered_at DOUBLE PRECISION DEFAULT 0
+);
+
+CREATE TABLE signals (
+id TEXT PRIMARY KEY,
+user_id BIGINT,
+symbol TEXT,
+direction TEXT,
+entry_price DOUBLE PRECISION,
+sl DOUBLE PRECISION,
+tp DOUBLE PRECISION,
+score INTEGER,
+status TEXT DEFAULT 'pending',
+result_pct DOUBLE PRECISION,
+created_at DOUBLE PRECISION,
+closed_at DOUBLE PRECISION
+);
+
+CREATE TABLE paper_positions (
+id TEXT PRIMARY KEY,
+user_id BIGINT,
+symbol TEXT,
+entry_price DOUBLE PRECISION,
+sl DOUBLE PRECISION,
+tp DOUBLE PRECISION,
+qty DOUBLE PRECISION,
+current_price DOUBLE PRECISION,
+pnl_usdt DOUBLE PRECISION,
+pnl_pct DOUBLE PRECISION,
+status TEXT DEFAULT 'open',
+exit_reason TEXT,
+opened_at DOUBLE PRECISION,
+closed_at DOUBLE PRECISION,
+peak_price DOUBLE PRECISION
+);
+
+CREATE TABLE paper_capitals (
+user_id BIGINT PRIMARY KEY,
+capital DOUBLE PRECISION DEFAULT 10000
+);
+```
+
+---
+
+# Étape 3 — Exécuter la migration
+
+Exécuter :
+
+```bash
+python migrate_to_postgres.py
+```
+
+Si une erreur apparaît :
+
+* la corriger
+* relancer automatiquement
+
+jusqu'à réussite complète.
+
+---
+
+# Étape 4 — Migrer toute la couche base de données
+
+Supprimer complètement SQLite.
+
+Remplacer partout :
+
+```
+sqlite3
+```
+
+par
+
+```
+psycopg2
+```
+
+Créer une connexion PostgreSQL centralisée utilisant :
+
+```
+DATABASE_URL
+```
+
+Connexion persistante.
+
+Transactions sécurisées.
+
+Commit/Rollback.
+
+Fermeture propre.
+
+---
+
+# Étape 5 — Migrer tous les fichiers SQL
+
+Analyser automatiquement tout le repository.
+
+Ne pas se limiter à quelques fichiers.
+
+Migrer chaque fichier utilisant SQLite.
+
+Notamment :
+
+* database.py
+
+* user_manager.py
+
+* history_manager.py
+
+* alert_manager.py
+
+* paper_trader.py
+
+* bot_handlers.py
+
+* admin_handlers.py
+
+mais également tous les autres fichiers détectés.
+
+Effectuer automatiquement :
+
+Remplacer
+
+```
+?
+```
+
+par
+
+```
+%s
+```
+
+Remplacer
+
+```
+INSERT OR REPLACE
+```
+
+par
+
+```
+INSERT ... ON CONFLICT (...) DO UPDATE
+```
+
+Remplacer
+
+```
+INSERT OR IGNORE
+```
+
+par
+
+```
+INSERT ... ON CONFLICT DO NOTHING
+```
+
+Supprimer :
+
+```
+row_factory
+```
+
+Supprimer tout code spécifique SQLite.
+
+Adapter les exceptions :
+
+```
+sqlite3.Error
+sqlite3.OperationalError
+sqlite3.IntegrityError
+```
+
+vers les exceptions psycopg2 appropriées.
+
+---
+
+# Étape 6 — Vérifier les deux repositories
+
+Analyser entièrement le repository Web.
+
+Vérifier que :
+
+* il n'utilise plus SQLite
+
+* aucune requête SQLite ne subsiste
+
+* toutes les requêtes utilisent PostgreSQL
+
+Puis analyser entièrement le repository Bot.
+
+Faire exactement la même vérification.
+
+Les deux projets doivent être cohérents.
+
+Ils doivent partager exactement le même moteur PostgreSQL.
+
+---
+
+# Étape 7 — Compilation
+
+Compiler tous les fichiers Python.
+
+Corriger automatiquement toutes les erreurs.
+
+Continuer jusqu'à obtenir zéro erreur.
+
+Exécuter notamment :
+
+```bash
+python -m compileall .
+```
+
+et, si nécessaire :
+
+```bash
+python -m py_compile
+```
+
+---
+
+# Étape 8 — Vérifications finales
+
+Contrôler :
+
+* imports
+
+* syntaxe
+
+* connexions
+
+* transactions
+
+* variables d'environnement
+
+* requêtes SQL
+
+* compatibilité PostgreSQL
+
+* cohérence entre Web et Bot
+
+Corriger tout problème détecté.
+
+---
+
+# Étape 9 — Git
+
+Lorsque tout fonctionne :
+
+```
+git add -A
+git commit -m "Complete migration from SQLite to PostgreSQL on Bot and Web repositories"
+```
+
+---
+
+# Objectif final
+
+À la fin de ton travail :
+
+* plus aucune référence à SQLite dans aucun des deux repositories
+* toutes les données présentes dans PostgreSQL Railway
+* les deux services utilisent `DATABASE_URL`
+* le Web fonctionne
+* le Bot fonctionne
+* les deux projets sont synchronisés avec le même schéma PostgreSQL
+* tous les tests de compilation passent sans erreur
+* tous les changements sont commités dans chaque repository
+* produire un rapport final listant les fichiers modifiés, les commandes exécutées, les éventuelles corrections apportées et le résultat de la migration.
