@@ -1,432 +1,113 @@
-# Mission
+# OBJECTIF GLOBAL
 
-Tu es un agent de développement autonome. Tu dois terminer la migration complète de **Bitsure Teddy** de SQLite vers PostgreSQL.
+Le projet est composé de 3 parties :
+1. Bot de trading (Python)
+2. Base de données PostgreSQL (Railway)
+3. Dashboard web (Teddy-web)
 
-Le projet est composé de **deux repositories** :
-
-* Repository 1 : **Web** (migration déjà partiellement effectuée)
-* Repository 2 : **Bot Telegram** (migration à effectuer)
-
-Le but est que **les deux services utilisent exactement la même base PostgreSQL Railway** via la variable d'environnement `DATABASE_URL`.
-
-Tu ne dois poser **aucune question**. Tu dois analyser les deux repositories, effectuer toutes les modifications nécessaires, vérifier qu'elles fonctionnent puis créer les commits Git.
-
----
-
-# IMPORTANT
-
-Commence par analyser entièrement les deux repositories afin de comprendre :
-
-* l'architecture
-* les modèles de données
-* les accès à la base
-* les fichiers déjà migrés
-* les fichiers restant à migrer
-
-Le repository Web a déjà reçu une partie de la migration.
-
-Tu dois donc :
-
-* vérifier ce qui a déjà été fait
-* corriger les éventuelles incohérences
-* terminer uniquement ce qui manque
-
-Le repository Bot doit être entièrement migré.
-
-Les deux repositories doivent utiliser exactement la même logique PostgreSQL.
+Le système est censé fonctionner en TEMPS RÉEL :
+- le bot génère des signaux
+- les signaux sont stockés dans PostgreSQL
+- le dashboard affiche les données à jour immédiatement
 
 ---
 
-# Étape 0 — Backup
+# PROBLÈME ACTUEL
 
-Avant toute modification :
-
-Créer un dossier :
-
-```
-backup_before_postgres/
-```
-
-Y copier tous les fichiers qui seront modifiés.
-
-Ne jamais modifier un fichier sans sauvegarde.
+Le dashboard :
+- affiche des données obsolètes
+- affiche parfois des prix incohérents ou inexistants
+- ne semble pas synchronisé avec le bot
+- ne reflète pas les dernières données de la base PostgreSQL
 
 ---
 
-# Étape 1 — Installer les dépendances
+# OBJECTIF DE TA MISSION
 
-Installer si nécessaire :
+Tu dois analyser TOUT le projet et corriger les problèmes suivants :
 
-```bash
-pip install psycopg2-binary
-```
-
-Mettre à jour également les fichiers de dépendances (`requirements.txt`, `pyproject.toml`, etc.) si nécessaire.
-
----
-
-# Étape 2 — Créer le script de migration
-
-Créer :
-
-```
-migrate_to_postgres.py
-```
-
-Le script doit :
-
-* lire SQLite
-
-```
-data/bitsure.db
-```
-
-* lire la variable
-
-```
-DATABASE_URL
-```
-
-* créer toutes les tables PostgreSQL
-
-* recopier toutes les données
-
-* conserver les clés primaires
-
-* conserver les IDs
-
-* conserver les timestamps
-
-* vérifier le nombre de lignes importées
-
-* afficher un rapport final
-
-Exemple :
-
-```
-users : OK (253 lignes)
-
-alerts : OK (420 lignes)
-
-signals : OK (...)
-
-Migration successful
-```
+## 1. Synchronisation temps réel
+- Vérifier si le dashboard recharge les données dynamiquement
+- Vérifier si des caches frontend existent (React/Vue/local cache/API cache)
+- Vérifier si les endpoints API renvoient des données fraîches
+- Corriger tout système de cache bloquant les mises à jour
 
 ---
 
-# Les tables PostgreSQL doivent être équivalentes à :
+## 2. Cohérence base de données
+- Vérifier que toutes les requêtes utilisent PostgreSQL (pas SQLite)
+- Vérifier que toutes les tables sont correctement utilisées :
+  - users
+  - usage
+  - settings
+  - watchlist
+  - alerts
+  - signals
+  - paper_positions
+  - paper_capitals
 
-```sql
-CREATE TABLE users (
-user_id BIGINT PRIMARY KEY,
-role TEXT DEFAULT 'tester',
-lang TEXT DEFAULT 'en',
-timeframe TEXT DEFAULT '1h',
-risk TEXT DEFAULT 'medium',
-terms_accepted INTEGER DEFAULT 0,
-trial_start DOUBLE PRECISION DEFAULT 0,
-created_at DOUBLE PRECISION DEFAULT 0,
-approved INTEGER DEFAULT 0,
-memo TEXT,
-username TEXT,
-pin TEXT
-);
-
-CREATE TABLE usage (
-user_id BIGINT,
-date TEXT,
-count INTEGER DEFAULT 0,
-PRIMARY KEY(user_id,date)
-);
-
-CREATE TABLE settings (
-user_id BIGINT,
-key TEXT,
-value TEXT,
-PRIMARY KEY(user_id,key)
-);
-
-CREATE TABLE watchlist (
-user_id BIGINT,
-symbol TEXT,
-PRIMARY KEY(user_id,symbol)
-);
-
-CREATE TABLE alerts (
-id SERIAL PRIMARY KEY,
-user_id BIGINT,
-symbol TEXT,
-condition TEXT,
-price DOUBLE PRECISION,
-triggered INTEGER DEFAULT 0,
-created_at DOUBLE PRECISION DEFAULT 0,
-triggered_at DOUBLE PRECISION DEFAULT 0
-);
-
-CREATE TABLE signals (
-id TEXT PRIMARY KEY,
-user_id BIGINT,
-symbol TEXT,
-direction TEXT,
-entry_price DOUBLE PRECISION,
-sl DOUBLE PRECISION,
-tp DOUBLE PRECISION,
-score INTEGER,
-status TEXT DEFAULT 'pending',
-result_pct DOUBLE PRECISION,
-created_at DOUBLE PRECISION,
-closed_at DOUBLE PRECISION
-);
-
-CREATE TABLE paper_positions (
-id TEXT PRIMARY KEY,
-user_id BIGINT,
-symbol TEXT,
-entry_price DOUBLE PRECISION,
-sl DOUBLE PRECISION,
-tp DOUBLE PRECISION,
-qty DOUBLE PRECISION,
-current_price DOUBLE PRECISION,
-pnl_usdt DOUBLE PRECISION,
-pnl_pct DOUBLE PRECISION,
-status TEXT DEFAULT 'open',
-exit_reason TEXT,
-opened_at DOUBLE PRECISION,
-closed_at DOUBLE PRECISION,
-peak_price DOUBLE PRECISION
-);
-
-CREATE TABLE paper_capitals (
-user_id BIGINT PRIMARY KEY,
-capital DOUBLE PRECISION DEFAULT 10000
-);
-```
+- Vérifier qu’il n’y a pas de données simulées ou mock data dans le frontend
 
 ---
 
-# Étape 3 — Exécuter la migration
+## 3. Problème des prix incohérents
+Le site affiche des prix qui ne correspondent pas à la réalité.
 
-Exécuter :
+Tu dois :
+- Identifier la source des prix (API, bot, cache, fallback)
+- Vérifier si les prix sont :
+  - stockés en DB
+  - calculés côté backend
+  - ou récupérés d'une API externe
 
-```bash
-python migrate_to_postgres.py
-```
-
-Si une erreur apparaît :
-
-* la corriger
-* relancer automatiquement
-
-jusqu'à réussite complète.
+- Corriger toute logique qui génère des prix faux ou figés
 
 ---
 
-# Étape 4 — Migrer toute la couche base de données
-
-Supprimer complètement SQLite.
-
-Remplacer partout :
-
-```
-sqlite3
-```
-
-par
-
-```
-psycopg2
-```
-
-Créer une connexion PostgreSQL centralisée utilisant :
-
-```
-DATABASE_URL
-```
-
-Connexion persistante.
-
-Transactions sécurisées.
-
-Commit/Rollback.
-
-Fermeture propre.
+## 4. Analyse du bot (important)
+- Vérifier comment le bot écrit les signaux en base
+- Vérifier si les données sont mises à jour ou seulement insérées une fois
+- Vérifier si les timestamps sont corrects (created_at / updated_at)
+- Vérifier si le bot et le dashboard utilisent exactement la même DATABASE_URL
 
 ---
 
-# Étape 5 — Migrer tous les fichiers SQL
-
-Analyser automatiquement tout le repository.
-
-Ne pas se limiter à quelques fichiers.
-
-Migrer chaque fichier utilisant SQLite.
-
-Notamment :
-
-* database.py
-
-* user_manager.py
-
-* history_manager.py
-
-* alert_manager.py
-
-* paper_trader.py
-
-* bot_handlers.py
-
-* admin_handlers.py
-
-mais également tous les autres fichiers détectés.
-
-Effectuer automatiquement :
-
-Remplacer
-
-```
-?
-```
-
-par
-
-```
-%s
-```
-
-Remplacer
-
-```
-INSERT OR REPLACE
-```
-
-par
-
-```
-INSERT ... ON CONFLICT (...) DO UPDATE
-```
-
-Remplacer
-
-```
-INSERT OR IGNORE
-```
-
-par
-
-```
-INSERT ... ON CONFLICT DO NOTHING
-```
-
-Supprimer :
-
-```
-row_factory
-```
-
-Supprimer tout code spécifique SQLite.
-
-Adapter les exceptions :
-
-```
-sqlite3.Error
-sqlite3.OperationalError
-sqlite3.IntegrityError
-```
-
-vers les exceptions psycopg2 appropriées.
+## 5. API backend
+- Vérifier tous les endpoints utilisés par le dashboard
+- Vérifier :
+  - filtres incorrects
+  - LIMIT trop bas
+  - données partiellement renvoyées
+  - erreurs silencieuses
 
 ---
 
-# Étape 6 — Vérifier les deux repositories
+## 6. Correction attendue
 
-Analyser entièrement le repository Web.
+À la fin :
 
-Vérifier que :
-
-* il n'utilise plus SQLite
-
-* aucune requête SQLite ne subsiste
-
-* toutes les requêtes utilisent PostgreSQL
-
-Puis analyser entièrement le repository Bot.
-
-Faire exactement la même vérification.
-
-Les deux projets doivent être cohérents.
-
-Ils doivent partager exactement le même moteur PostgreSQL.
+- le dashboard doit afficher des données en temps réel
+- les signaux doivent être synchronisés avec le bot
+- les prix doivent être cohérents et issus d’une seule source fiable
+- aucune donnée mock ou obsolète ne doit exister
 
 ---
 
-# Étape 7 — Compilation
+# CONTRAINTES
 
-Compiler tous les fichiers Python.
-
-Corriger automatiquement toutes les erreurs.
-
-Continuer jusqu'à obtenir zéro erreur.
-
-Exécuter notamment :
-
-```bash
-python -m compileall .
-```
-
-et, si nécessaire :
-
-```bash
-python -m py_compile
-```
+- Ne change pas le style du site (UI/UX)
+- Ne casse pas les endpoints existants sans migration propre
+- Priorité : cohérence des données + temps réel
+- Ajouter logs si nécessaire pour debug
+- Corriger plutôt que réécrire complètement
 
 ---
 
-# Étape 8 — Vérifications finales
+# OUTPUT ATTENDU
 
-Contrôler :
-
-* imports
-
-* syntaxe
-
-* connexions
-
-* transactions
-
-* variables d'environnement
-
-* requêtes SQL
-
-* compatibilité PostgreSQL
-
-* cohérence entre Web et Bot
-
-Corriger tout problème détecté.
+1. Liste des problèmes trouvés
+2. Fichiers concernés
+3. Corrections appliquées
+4. Vérification finale que tout est synchronisé
 
 ---
-
-# Étape 9 — Git
-
-Lorsque tout fonctionne :
-
-```
-git add -A
-git commit -m "Complete migration from SQLite to PostgreSQL on Bot and Web repositories"
-```
-
----
-
-# Objectif final
-
-À la fin de ton travail :
-
-* plus aucune référence à SQLite dans aucun des deux repositories
-* toutes les données présentes dans PostgreSQL Railway
-* les deux services utilisent `DATABASE_URL`
-* le Web fonctionne
-* le Bot fonctionne
-* les deux projets sont synchronisés avec le même schéma PostgreSQL
-* tous les tests de compilation passent sans erreur
-* tous les changements sont commités dans chaque repository
-* produire un rapport final listant les fichiers modifiés, les commandes exécutées, les éventuelles corrections apportées et le résultat de la migration.

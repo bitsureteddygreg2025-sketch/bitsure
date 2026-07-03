@@ -151,10 +151,17 @@ def _ensure_schema(conn):
             id TEXT PRIMARY KEY,
             user_id BIGINT,
             symbol TEXT,
+            side TEXT DEFAULT 'BUY',
             entry_price DOUBLE PRECISION,
+            exit_price DOUBLE PRECISION,
             sl DOUBLE PRECISION,
             tp DOUBLE PRECISION,
             qty DOUBLE PRECISION,
+            leverage DOUBLE PRECISION DEFAULT 1,
+            fees_total DOUBLE PRECISION DEFAULT 0,
+            slippage DOUBLE PRECISION DEFAULT 0,
+            capital_before DOUBLE PRECISION,
+            capital_after DOUBLE PRECISION,
             current_price DOUBLE PRECISION,
             pnl_usdt DOUBLE PRECISION,
             pnl_pct DOUBLE PRECISION,
@@ -179,6 +186,14 @@ def _ensure_schema(conn):
         "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS triggered_at DOUBLE PRECISION DEFAULT 0",
         "ALTER TABLE signals ADD COLUMN IF NOT EXISTS user_id BIGINT",
         "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS peak_price DOUBLE PRECISION",
+        # Nouvelles colonnes paper trading v2
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS side TEXT DEFAULT 'BUY'",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS exit_price DOUBLE PRECISION",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS leverage DOUBLE PRECISION DEFAULT 1",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS fees_total DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS slippage DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS capital_before DOUBLE PRECISION",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS capital_after DOUBLE PRECISION",
     ]
     for statement in statements:
         conn.execute(statement)

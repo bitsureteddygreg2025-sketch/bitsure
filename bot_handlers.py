@@ -12,7 +12,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
-from config import ADMIN_ID, DEFAULT_TIMEFRAME, SYMBOL_CONFIGS, ATR_MULTIPLIER_SL, RR_RATIO_TARGET
+from config import (
+    ADMIN_ID, DEFAULT_TIMEFRAME, SYMBOL_CONFIGS, ATR_MULTIPLIER_SL, RR_RATIO_TARGET,
+    PAPER_DEFAULT_LEVERAGE, PAPER_MAX_LEVERAGE, PAPER_FEES_PCT, PAPER_SLIPPAGE_PCT,
+)
 from data_fetcher import DataFetcher
 from signal_engine import SignalEngine
 from indicators import atr
@@ -1121,63 +1124,244 @@ async def historique(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @check_limit
 async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Commande paper trading unifiee.
+
+    Usage :
+      /paper start                     — initialise le compte (10 000 USDT)
+      /paper buy SYMBOL [leverage]     — ouvre une position LONG
+      /paper short SYMBOL [leverage]   — ouvre une position SHORT
+      /paper close SYMBOL              — ferme toutes les positions sur SYMBOL
+      /paper status                    — positions ouvertes + solde
+      /paper history                   — 10 derniers trades fermes
+      /paper stats                     — statistiques globales
+    """
     if await handle_pending_alert_input(update, context):
         return
-    lang = get_user_lang(update)
+    lang    = get_user_lang(update)
     user_id = update.effective_user.id
+
     if not context.args:
         await respond(update, get_text(lang, "paper_usage"))
         return
+
     action = context.args[0].lower()
+
+    # ── START ────────────────────────────────────────────────────────────
     if action == "start":
         paper_trader.init_capital(user_id)
-        await respond(update, get_text(lang, "paper_started", capital=10000))
+        capital = paper_trader.get_capital(user_id)
+        await respond(update, get_text(lang, "paper_started", capital=capital))
+
+    # ── STATUS ───────────────────────────────────────────────────────────
     elif action == "status":
-        stats = paper_trader.get_stats(user_id)
+        stats     = paper_trader.get_stats(user_id)
         positions = paper_trader.get_positions(user_id)
-        msg = get_text(lang, "paper_status", capital=round(stats["capital"], 4), equity=round(stats["equity"], 4), open_positions=stats["open_positions"], total_pnl=round(stats["total_pnl"], 4))
+        msg = get_text(
+            lang, "paper_status",
+            capital=round(stats["capital"], 2),
+            equity=round(stats["equity"], 2),
+            open_positions=stats["open_positions"],
+            total_pnl=round(stats["total_pnl"], 2),
+        )
         if positions:
             for p in positions:
-                msg += f"\n{p['symbol']} @ {p['entry_price']:.4f} | SL: {p['sl']:.4f} | TP: {p['tp']:.4f} | PnL: {p['pnl_usdt']:.4f}$"
+                side_emoji = "🟢" if p["side"] == "BUY" else "🔴"
+                sl_str = f"{p['sl']:.4f}" if p.get("sl") else "—"
+                tp_str = f"{p['tp']:.4f}" if p.get("tp") else "—"
+                lev_str = f" x{p.get('leverage', 1.0):.0f}" if p.get('leverage', 1.0) > 1 else ""
+                pnl_sign = "+" if p.get("pnl_usdt", 0) >= 0 else ""
+                msg += (
+                    f"\n{side_emoji} *{p['symbol']}*{lev_str} @ {p['entry_price']:.4f}"
+                    f" | SL: {sl_str} | TP: {tp_str}"
+                    f" | PnL: {pnl_sign}{p.get('pnl_usdt', 0):.2f}$"
+                )
         else:
             msg += "\n" + get_text(lang, "paper_no_open_positions")
         await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
-    elif action == "buy":
+
+    # ── BUY (LONG) ───────────────────────────────────────────────────────
+    elif action in ("buy", "long"):
         if len(context.args) < 2:
             await respond(update, get_text(lang, "paper_buy_usage"))
             return
         symbol = normalize_symbol(context.args[1].upper())
+
+        # Levier optionnel en 3e argument
+        leverage = PAPER_DEFAULT_LEVERAGE
+        if len(context.args) >= 3:
+            try:
+                leverage = float(context.args[2])
+            except ValueError:
+                await respond(update, "❌ Levier invalide. Exemple : /paper buy BTCUSD 2")
+                return
+
         df = await fetcher.get_historical_data(symbol)
         if df is None or df.empty:
             await respond(update, get_text(lang, "data_unavailable"))
             return
-        trading_style = user_mgr.get_setting(update.effective_user.id, "trading_style", "day")
-        result = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
-        price = float(result["indicators"]["price"])
+
+        trading_style = user_mgr.get_setting(user_id, "trading_style", "day")
+        result  = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
+        price   = float(result["indicators"]["price"])
         atr_val = float(result["indicators"].get("atr", price * 0.01))
-        sl = price - ATR_MULTIPLIER_SL * atr_val
-        tp = price + RR_RATIO_TARGET * atr_val
+        sl      = price - ATR_MULTIPLIER_SL * atr_val
+        tp      = price + RR_RATIO_TARGET * atr_val * leverage
+
         capital = paper_trader.get_capital(user_id)
-        qty = capital / price if price > 0 else 1
-        pos = paper_trader.open_position(user_id, symbol, price, sl, tp, qty)
-        await respond(update, get_text(lang, "paper_opened", symbol=symbol, price=round(price, 4), sl=round(sl, 4), tp=round(tp, 4)))
+        # Quantite = margin disponible * levier / prix (on engage 10% du capital par defaut)
+        margin_used = capital * 0.10  # 10% du capital par trade
+        qty = (margin_used * leverage) / price if price > 0 else 0
+        if qty <= 0:
+            await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
+            return
+
+        pos, err = paper_trader.open_position(
+            user_id, symbol, price, sl, tp, qty,
+            side="BUY", leverage=leverage,
+        )
+        if err:
+            await respond(update, f"❌ {err}")
+            return
+
+        lev_str = f" (x{leverage:.0f})"
+        new_capital = paper_trader.get_capital(user_id)
+        fees_str = f"{pos.get('fees_total', 0):.4f}"
+        await respond(
+            update,
+            get_text(lang, "paper_opened",
+                     symbol=symbol,
+                     price=round(pos["entry_price"], 4),
+                     sl=round(sl, 4),
+                     tp=round(tp, 4))
+            + f"\n📐 Sens : BUY{lev_str} | Qty : {qty:.6f}"
+            + f"\n💸 Frais entrée : {fees_str} USDT"
+            + f"\n💰 Capital restant : {new_capital:.2f} USDT",
+        )
+
+    # ── SHORT (SELL) ──────────────────────────────────────────────────────
+    elif action in ("short", "sell_short"):
+        if len(context.args) < 2:
+            await respond(update, "❌ Usage : /paper short SYMBOL [leverage]")
+            return
+        symbol = normalize_symbol(context.args[1].upper())
+
+        leverage = PAPER_DEFAULT_LEVERAGE
+        if len(context.args) >= 3:
+            try:
+                leverage = float(context.args[2])
+            except ValueError:
+                await respond(update, "❌ Levier invalide. Exemple : /paper short BTCUSD 2")
+                return
+
+        df = await fetcher.get_historical_data(symbol)
+        if df is None or df.empty:
+            await respond(update, get_text(lang, "data_unavailable"))
+            return
+
+        trading_style = user_mgr.get_setting(user_id, "trading_style", "day")
+        result  = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
+        price   = float(result["indicators"]["price"])
+        atr_val = float(result["indicators"].get("atr", price * 0.01))
+        # Pour un SHORT : SL au-dessus, TP en-dessous
+        sl = price + ATR_MULTIPLIER_SL * atr_val
+        tp = price - RR_RATIO_TARGET * atr_val * leverage
+
+        capital    = paper_trader.get_capital(user_id)
+        margin_used = capital * 0.10
+        qty = (margin_used * leverage) / price if price > 0 else 0
+        if qty <= 0:
+            await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
+            return
+
+        pos, err = paper_trader.open_position(
+            user_id, symbol, price, sl, tp, qty,
+            side="SELL", leverage=leverage,
+        )
+        if err:
+            await respond(update, f"❌ {err}")
+            return
+
+        lev_str = f" (x{leverage:.0f})"
+        new_capital = paper_trader.get_capital(user_id)
+        fees_str = f"{pos.get('fees_total', 0):.4f}"
+        await respond(
+            update,
+            f"🔴 Position SHORT ouverte : *{symbol}*{lev_str}"
+            f"\n📍 Entrée : {pos['entry_price']:.4f}"
+            f" | SL : {sl:.4f} | TP : {tp:.4f}"
+            f"\n📐 Qty : {qty:.6f}"
+            f"\n💸 Frais entrée : {fees_str} USDT"
+            f"\n💰 Capital restant : {new_capital:.2f} USDT",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    # ── SELL = FERMETURE (compatibilite ancienne commande) ────────────────
     elif action == "sell":
+        """
+        /paper sell SYMBOL — ferme toutes les positions BUY sur SYMBOL
+        (pour ouvrir un short, utilisez /paper short SYMBOL)
+        """
         if len(context.args) < 2:
             await respond(update, get_text(lang, "paper_sell_usage"))
             return
-        symbol = normalize_symbol(context.args[1].upper())
+        symbol    = normalize_symbol(context.args[1].upper())
         positions = paper_trader.get_positions(user_id)
-        closed = False
+        nb_closed = 0
+        for pos in list(positions):
+            if pos["symbol"] == symbol and pos["side"] == "BUY":
+                price_data = fetcher.get_cached_price(symbol)
+                exit_price = (
+                    float(price_data["price"])
+                    if (price_data and "price" in price_data)
+                    else float(pos["current_price"])
+                )
+                result = paper_trader.close_position(user_id, pos["id"], exit_price)
+                if result:
+                    nb_closed += 1
+        if nb_closed > 0:
+            new_capital = paper_trader.get_capital(user_id)
+            await respond(
+                update,
+                get_text(lang, "paper_closed", symbol=symbol)
+                + f"\n💰 Capital : {new_capital:.2f} USDT"
+            )
+        else:
+            await respond(update, get_text(lang, "paper_no_open_position", symbol=symbol))
+
+    # ── CLOSE = FERMETURE EXPLICITE (BUY et SELL) ─────────────────────────
+    elif action == "close":
+        if len(context.args) < 2:
+            await respond(update, "❌ Usage : /paper close SYMBOL")
+            return
+        symbol    = normalize_symbol(context.args[1].upper())
+        positions = paper_trader.get_positions(user_id)
+        nb_closed = 0
         for pos in list(positions):
             if pos["symbol"] == symbol:
                 price_data = fetcher.get_cached_price(symbol)
-                exit_price = float(price_data["price"]) if (price_data and "price" in price_data) else float(pos["current_price"])
-                paper_trader.close_position(user_id, pos["id"], exit_price)
-                closed = True
-        if closed:
-            await respond(update, get_text(lang, "paper_closed", symbol=symbol))
-        else:
+                exit_price = (
+                    float(price_data["price"])
+                    if (price_data and "price" in price_data)
+                    else float(pos["current_price"])
+                )
+                result = paper_trader.close_position(user_id, pos["id"], exit_price)
+                if result:
+                    pnl_sign = "+" if result.get("pnl_usdt", 0) >= 0 else ""
+                    nb_closed += 1
+                    await respond(
+                        update,
+                        f"✅ Position {result['side']} *{symbol}* fermée"
+                        f"\n📍 Sortie : {result.get('exit_price', exit_price):.4f}"
+                        f"\n📊 PnL brut : {pnl_sign}{result.get('pnl_usdt', 0):.4f} USDT"
+                        f"\n💸 Frais totaux : {result.get('fees_total', 0):.4f} USDT"
+                        f"\n💰 Nouveau capital : {paper_trader.get_capital(user_id):.2f} USDT",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+        if nb_closed == 0:
             await respond(update, get_text(lang, "paper_no_open_position", symbol=symbol))
+
+    # ── HISTORY ──────────────────────────────────────────────────────────
     elif action == "history":
         closed = paper_trader.get_closed_positions(user_id)
         if not closed:
@@ -1185,12 +1369,42 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         msg = get_text(lang, "paper_history_title")
         for p in closed[-10:]:
-            emoji = "🟢" if p.get("pnl_usdt", 0) > 0 else "🔴"
-            msg += f"\n{emoji} {p['symbol']} @ {p['entry_price']:.4f} -> {p.get('exit_reason', '?')} ({p.get('pnl_usdt', 0):.4f}$)"
+            pnl_net  = p.get("pnl_usdt", 0) - p.get("fees_total", 0)
+            emoji    = "🟢" if pnl_net >= 0 else "🔴"
+            side_str = p.get("side", "BUY")
+            lev      = p.get("leverage", 1.0)
+            lev_str  = f" x{lev:.0f}" if lev > 1 else ""
+            reason   = p.get("exit_reason", "?")
+            cap_bef  = p.get("capital_before")
+            cap_aft  = p.get("capital_after")
+            cap_str  = f" | {cap_bef:.2f}→{cap_aft:.2f}" if cap_bef and cap_aft else ""
+            pnl_sign = "+" if pnl_net >= 0 else ""
+            entry_p  = p.get("entry_price", 0)
+            exit_p   = p.get("exit_price") or p.get("current_price", 0)
+            msg += (
+                f"\n{emoji} {side_str}{lev_str} *{p['symbol']}*"
+                f" {entry_p:.4f}→{exit_p:.4f}"
+                f" [{reason}] PnL net: {pnl_sign}{pnl_net:.2f}${cap_str}"
+            )
         await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
+
+    # ── STATS ─────────────────────────────────────────────────────────────
     elif action == "stats":
         stats = paper_trader.get_stats(user_id)
-        await respond(update, get_text(lang, "paper_stats", capital=stats["capital"], equity=stats["equity"], total_pnl=stats["total_pnl"], total_trades=stats["total_trades"], wins=stats["wins"], losses=stats["losses"], win_rate=stats["win_rate"]))
+        await respond(
+            update,
+            get_text(
+                lang, "paper_stats",
+                capital=stats["capital"],
+                equity=stats["equity"],
+                total_pnl=stats["total_pnl"],
+                total_trades=stats["total_trades"],
+                wins=stats["wins"],
+                losses=stats["losses"],
+                win_rate=stats["win_rate"],
+            )
+        )
+
     else:
         await respond(update, get_text(lang, "paper_usage"))
 
@@ -1199,15 +1413,16 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def check_signal_outcomes(bot):
+    """Vérifie les outcomes (win/loss) des signaux en attente."""
     signals = history_mgr.get_recent_signals(50)
     logger.info(f"check_signal_outcomes: {len(signals)} signaux trouvés")
     for s in signals:
         if s.get("status") not in (None, "pending"):
             continue
         symbol = s["symbol"]
-        entry = float(s["entry_price"])
-        sl = float(s.get("sl", 0) or 0)
-        tp = float(s.get("tp", 0) or 0)
+        entry  = float(s["entry_price"])
+        sl     = float(s.get("sl", 0) or 0)
+        tp     = float(s.get("tp", 0) or 0)
         if sl == 0 or tp == 0:
             logger.info(f"Signal {s['id']} {symbol} ignoré: SL={sl}, TP={tp}")
             continue
@@ -1216,8 +1431,7 @@ async def check_signal_outcomes(bot):
         if not price_data:
             continue
         current_price = float(price_data["price"])
-        direction = s["direction"]
-        
+        direction     = s["direction"]
         if direction == "BUY":
             if current_price >= tp:
                 pnl_pct = round((current_price - entry) / entry * 100, 4)
@@ -1225,7 +1439,6 @@ async def check_signal_outcomes(bot):
             elif current_price <= sl:
                 pnl_pct = round((current_price - entry) / entry * 100, 4)
                 history_mgr.update_signal_status(s["id"], "loss", pnl_pct)
-                
         elif direction == "SELL":
             if current_price <= tp:
                 pnl_pct = round((entry - current_price) / entry * 100, 4)
@@ -1234,12 +1447,86 @@ async def check_signal_outcomes(bot):
                 pnl_pct = round((entry - current_price) / entry * 100, 4)
                 history_mgr.update_signal_status(s["id"], "loss", pnl_pct)
 
+
+async def check_paper_exits(bot):
+    """
+    Surveillance automatique des positions paper trading.
+    Appelée toutes les 5 minutes par le scheduler.
+    Met à jour les prix, vérifie les SL/TP et notifie les utilisateurs.
+    """
+    try:
+        # 1. Mettre à jour les prix pour chaque symbole surveillé
+        all_symbols: set = set()
+        for uid, plist in paper_trader.positions.items():
+            for pos in plist:
+                if pos["status"] == "open":
+                    all_symbols.add(pos["symbol"])
+
+        for symbol in all_symbols:
+            price_data = await fetcher.get_realtime_price(symbol)
+            if price_data and "price" in price_data:
+                paper_trader.update_price(symbol, float(price_data["price"]))
+
+        # 2. Vérifier les déclenchements SL/TP
+        triggered = paper_trader.check_exits()
+
+        # 3. Notifier chaque utilisateur concerné
+        for pos in triggered:
+            # Retrouver l'uid depuis les closed_positions
+            uid = None
+            for u, plist in paper_trader.closed_positions.items():
+                for p in plist:
+                    if p["id"] == pos["id"]:
+                        uid = u
+                        break
+                if uid:
+                    break
+            if not uid:
+                continue
+            try:
+                reason    = pos.get("exit_reason", "?")
+                pnl_net   = pos.get("pnl_usdt", 0) - pos.get("fees_total", 0)
+                pnl_sign  = "+" if pnl_net >= 0 else ""
+                emoji     = "✅" if pnl_net >= 0 else "❌"
+                cap_after = pos.get("capital_after", 0)
+                side_str  = pos.get("side", "BUY")
+                exit_p    = pos.get("exit_price") or pos.get("current_price", 0)
+                msg = (
+                    f"{emoji} *Paper Trading — {reason} déclenché*\n"
+                    f"📌 {side_str} *{pos['symbol']}*\n"
+                    f"📍 Entrée : {pos['entry_price']:.4f} | Sortie : {exit_p:.4f}\n"
+                    f"📊 PnL net : {pnl_sign}{pnl_net:.2f} USDT\n"
+                    f"💰 Capital : {cap_after:.2f} USDT"
+                )
+                await bot.send_message(
+                    chat_id=int(uid),
+                    text=msg,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.warning(f"[check_paper_exits] Notification uid={uid} échouée : {e}")
+
+    except Exception as e:
+        logger.error(f"[check_paper_exits] Erreur : {e}")
+
+
 def start_signal_monitoring(app):
+    """Démarre le scheduler de surveillance des signaux et des paper positions."""
     global signal_scheduler
     if signal_scheduler is not None:
         return
     signal_scheduler = AsyncIOScheduler(timezone="UTC")
-    signal_scheduler.add_job(check_signal_outcomes, "interval", minutes=15, kwargs={"bot": app.bot}, id="signal_monitor", replace_existing=True)
+    signal_scheduler.add_job(
+        check_signal_outcomes, "interval", minutes=15,
+        kwargs={"bot": app.bot},
+        id="signal_monitor", replace_existing=True
+    )
+    # Surveillance paper trading toutes les 5 minutes
+    signal_scheduler.add_job(
+        check_paper_exits, "interval", minutes=5,
+        kwargs={"bot": app.bot},
+        id="paper_monitor", replace_existing=True
+    )
     signal_scheduler.start()
 
 signal_scheduler = None

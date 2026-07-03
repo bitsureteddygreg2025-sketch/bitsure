@@ -88,6 +88,27 @@ DATA_DIR = "data"
 TWELVEDATA_WS_URL = "wss://ws.twelvedata.com/v1/quotes/price"
 
 # =========================================================
+# PAPER TRADING
+# =========================================================
+
+# Capital virtuel initial (en USDT)
+PAPER_DEFAULT_CAPITAL  = 10_000.0
+
+# Frais de trading simulés (en %) appliqués à l'entrée ET à la sortie
+# Exemple : 0.10 = 0.10% par trade (maker/taker crypto standard)
+PAPER_FEES_PCT         = 0.10
+
+# Slippage simulé (en %) — écart entre le prix théorique et le prix d'exécution réel
+# Exemple : 0.05 = 0.05% (très conservateur pour du crypto liquide)
+PAPER_SLIPPAGE_PCT     = 0.05
+
+# Levier par défaut (1.0 = sans levier)
+PAPER_DEFAULT_LEVERAGE = 1.0
+
+# Levier maximum autorisé
+PAPER_MAX_LEVERAGE     = 10.0
+
+# =========================================================
 # AUTRES
 # =========================================================
 
