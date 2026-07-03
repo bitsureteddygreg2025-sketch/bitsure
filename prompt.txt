@@ -1,113 +1,86 @@
-# OBJECTIF GLOBAL
+Tu continues le refactoring d’un projet de bot de trading Python.
 
-Le projet est composé de 3 parties :
-1. Bot de trading (Python)
-2. Base de données PostgreSQL (Railway)
-3. Dashboard web (Teddy-web)
-
-Le système est censé fonctionner en TEMPS RÉEL :
-- le bot génère des signaux
-- les signaux sont stockés dans PostgreSQL
-- le dashboard affiche les données à jour immédiatement
+⚠️ IMPORTANT :
+Tu ne recommences pas depuis le début.
+Tu reprends EXACTEMENT là où le travail s’est arrêté.
 
 ---
 
-# PROBLÈME ACTUEL
+🧩 ÉTAT ACTUEL DU TRAVAIL (déjà terminé)
 
-Le dashboard :
-- affiche des données obsolètes
-- affiche parfois des prix incohérents ou inexistants
-- ne semble pas synchronisé avec le bot
-- ne reflète pas les dernières données de la base PostgreSQL
+Les étapes suivantes ont déjà été complétées :
 
----
-
-# OBJECTIF DE TA MISSION
-
-Tu dois analyser TOUT le projet et corriger les problèmes suivants :
-
-## 1. Synchronisation temps réel
-- Vérifier si le dashboard recharge les données dynamiquement
-- Vérifier si des caches frontend existent (React/Vue/local cache/API cache)
-- Vérifier si les endpoints API renvoient des données fraîches
-- Corriger tout système de cache bloquant les mises à jour
+1. Inspect project structure and current trading flow
+2. Refactor signal engine with asset-aware parameters
+3. Add / integrate money management module
 
 ---
 
-## 2. Cohérence base de données
-- Vérifier que toutes les requêtes utilisent PostgreSQL (pas SQLite)
-- Vérifier que toutes les tables sont correctement utilisées :
-  - users
-  - usage
-  - settings
-  - watchlist
-  - alerts
-  - signals
-  - paper_positions
-  - paper_capitals
+❗ ÉTAPE EN COURS (INCOMPLÈTE)
 
-- Vérifier qu’il n’y a pas de données simulées ou mock data dans le frontend
+Tu étais en train de travailler sur :
+
+➡️ improve signal history records
+
+Cette étape n’est PAS terminée.
+Tu dois la reprendre et la finaliser proprement.
 
 ---
 
-## 3. Problème des prix incohérents
-Le site affiche des prix qui ne correspondent pas à la réalité.
+🎯 OBJECTIF DE CETTE ÉTAPE
 
-Tu dois :
-- Identifier la source des prix (API, bot, cache, fallback)
-- Vérifier si les prix sont :
-  - stockés en DB
-  - calculés côté backend
-  - ou récupérés d'une API externe
+Améliorer complètement le système d’historique des signaux afin qu’il puisse :
 
-- Corriger toute logique qui génère des prix faux ou figés
-
----
-
-## 4. Analyse du bot (important)
-- Vérifier comment le bot écrit les signaux en base
-- Vérifier si les données sont mises à jour ou seulement insérées une fois
-- Vérifier si les timestamps sont corrects (created_at / updated_at)
-- Vérifier si le bot et le dashboard utilisent exactement la même DATABASE_URL
+- enregistrer tous les signaux générés (acceptés et rejetés)
+- stocker les raisons de validation ou rejet
+- lier chaque signal à :
+  - symbole
+  - score
+  - timeframe
+  - résultat final (WIN / LOSS si disponible)
+  - PnL si applicable
+  - paramètres utilisés (SL, TP, levier si existant)
+- permettre une analyse future fiable des performances du bot
 
 ---
 
-## 5. API backend
-- Vérifier tous les endpoints utilisés par le dashboard
-- Vérifier :
-  - filtres incorrects
-  - LIMIT trop bas
-  - données partiellement renvoyées
-  - erreurs silencieuses
+⚠️ CONTRAINTES IMPORTANTES
+
+- Ne change pas les modules déjà refactorisés sauf si nécessaire
+- Ne recommence pas le signal engine
+- Ne touche pas au money management sauf bug critique
+- Ne supprime aucune donnée existante sans migration ou compatibilité
+- L’historique doit rester compatible avec le reste du bot
 
 ---
 
-## 6. Correction attendue
+🧪 PHASE SUIVANTE OBLIGATOIRE
+
+Après avoir terminé l’amélioration de l’historique :
+
+➡️ exécuter run available checks and tests
+
+Cette étape doit :
+
+- vérifier la cohérence globale du projet
+- détecter les erreurs ou régressions introduites
+- valider que les modules suivants fonctionnent ensemble :
+  - signal engine
+  - money management
+  - paper trading
+  - history system
+
+---
+
+📦 LIVRABLE ATTENDU
 
 À la fin :
 
-- le dashboard doit afficher des données en temps réel
-- les signaux doivent être synchronisés avec le bot
-- les prix doivent être cohérents et issus d’une seule source fiable
-- aucune donnée mock ou obsolète ne doit exister
+- système d’historique complet et structuré
+- aucune régression sur les modules précédents
+- rapport de tests exécutés
+- confirmation que le bot est stable après refactor
 
 ---
 
-# CONTRAINTES
-
-- Ne change pas le style du site (UI/UX)
-- Ne casse pas les endpoints existants sans migration propre
-- Priorité : cohérence des données + temps réel
-- Ajouter logs si nécessaire pour debug
-- Corriger plutôt que réécrire complètement
-
----
-
-# OUTPUT ATTENDU
-
-1. Liste des problèmes trouvés
-2. Fichiers concernés
-3. Corrections appliquées
-4. Vérification finale que tout est synchronisé
-
----
+Commence directement par analyser l’état actuel de "signal history", puis termine l’implémentation et exécute les tests.

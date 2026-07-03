@@ -21,7 +21,10 @@ TABLES = {
                "created_at", "triggered_at"],
 
     "signals": ["id", "user_id", "symbol", "direction", "entry_price", "sl", "tp",
-                "score", "status", "result_pct", "created_at", "closed_at"],
+                "score", "status", "validation_status", "validation_reason",
+                "rejection_reason", "result_price", "result_pct", "pnl",
+                "capital_before", "capital_after", "timeframe", "signal_type",
+                "rr_ratio", "asset_class", "params_used", "created_at", "closed_at"],
 
     "paper_positions": ["id", "user_id", "symbol", "entry_price", "sl", "tp", "qty",
                         "current_price", "pnl_usdt", "pnl_pct", "status", "exit_reason",
@@ -94,7 +97,19 @@ CREATE_SQL = [
         tp DOUBLE PRECISION,
         score INTEGER,
         status TEXT,
+        validation_status TEXT,
+        validation_reason TEXT,
+        rejection_reason TEXT,
+        result_price DOUBLE PRECISION,
         result_pct DOUBLE PRECISION,
+        pnl DOUBLE PRECISION,
+        capital_before DOUBLE PRECISION,
+        capital_after DOUBLE PRECISION,
+        timeframe TEXT,
+        signal_type TEXT,
+        rr_ratio DOUBLE PRECISION,
+        asset_class TEXT,
+        params_used TEXT,
         created_at DOUBLE PRECISION,
         closed_at DOUBLE PRECISION
     )

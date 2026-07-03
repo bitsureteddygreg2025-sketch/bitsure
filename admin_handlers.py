@@ -268,7 +268,12 @@ async def exportsignals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "Symbole", "Direction", "Entree", "SL", "TP", "Score", "Statut", "PnL%", "Ouvert", "Ferme"])
+    writer.writerow([
+        "ID", "Symbole", "Direction", "Entree", "SL", "TP", "Score",
+        "Timeframe", "Validation", "Raison validation", "Statut", "Raison rejet",
+        "Prix resultat", "PnL%", "PnL", "Capital avant", "Capital apres", "RR", "Classe actif", "Parametres",
+        "Ouvert", "Ferme"
+    ])
     for s in signals:
         from datetime import datetime
         created = datetime.utcfromtimestamp(s['created_at']).strftime('%Y-%m-%d %H:%M') if s.get('created_at') else ''
@@ -281,8 +286,19 @@ async def exportsignals(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s.get('sl', ''),
             s.get('tp', ''),
             s.get('score', ''),
+            s.get('timeframe', ''),
+            s.get('validation_status', ''),
+            s.get('validation_reason', ''),
             s.get('status', ''),
+            s.get('rejection_reason', ''),
+            s.get('result_price', ''),
             s.get('result_pct', ''),
+            s.get('pnl', ''),
+            s.get('capital_before', ''),
+            s.get('capital_after', ''),
+            s.get('rr_ratio', ''),
+            s.get('asset_class', ''),
+            s.get('params_used', ''),
             created,
             closed
         ])

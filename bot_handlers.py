@@ -26,6 +26,7 @@ from utils import format_number, is_valid_symbol, normalize_symbol
 from i18n import get_text
 from payments import generate_binance_payment
 from paper_trader import PaperTrader
+from risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 fetcher = DataFetcher.get_instance()
@@ -729,18 +730,40 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callb
                        sma20=format_number(ind['sma20']), sma50=format_number(ind['sma50']),
                        teddy_score=result['teddy_score'])
     pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    if result['signal'] not in ('BUY', 'SELL'):
+        pending_signals = 0
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
     pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    if result['signal'] not in ('BUY', 'SELL'):
+        pending_signals = 0
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
     pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
+    if result['signal'] not in ('BUY', 'SELL'):
+        pending_signals = 0
     if pending_signals >= 50:
         await msg.edit_text('🚫 Max 50 signals pending.')
         return
-    signal_id = history_mgr.add_signal(symbol, result['signal'], ind['price'], DEFAULT_TIMEFRAME, "analyse", result['teddy_score'], sl=result.get('sl'), tp=result.get('tp'), user_id=update.effective_user.id) if result['signal'] in ('BUY', 'SELL') else 'N/A'
+    signal_id = history_mgr.add_signal(
+        symbol,
+        result['signal'],
+        ind['price'],
+        tf,
+        "analyse",
+        result['teddy_score'],
+        sl=result.get('sl'),
+        tp=result.get('tp'),
+        user_id=update.effective_user.id,
+        validation_status=result.get("validation_status", "VALIDATED" if result["signal"] in ("BUY", "SELL") else "REJECTED"),
+        validation_reason=result.get("reason") if result["signal"] in ("BUY", "SELL") else None,
+        rejection_reason=result.get("rejection_reason"),
+        rr_ratio=result.get("rr_ratio"),
+        asset_class=result.get("asset_class"),
+        params_used=result.get("params_used"),
+    )
     caption += f"\n\n🔐 ID: `{signal_id}`"
     await msg.delete()
     if from_callback and update.callback_query:
@@ -1205,13 +1228,19 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result  = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
         price   = float(result["indicators"]["price"])
         atr_val = float(result["indicators"].get("atr", price * 0.01))
-        sl      = price - ATR_MULTIPLIER_SL * atr_val
-        tp      = price + RR_RATIO_TARGET * atr_val * leverage
+        sl      = result.get("sl") if result.get("signal") == "BUY" and result.get("sl") else price - ATR_MULTIPLIER_SL * atr_val
+        tp      = result.get("tp") if result.get("signal") == "BUY" and result.get("tp") else price + RR_RATIO_TARGET * atr_val
 
         capital = paper_trader.get_capital(user_id)
         # Quantite = margin disponible * levier / prix (on engage 10% du capital par defaut)
-        margin_used = capital * 0.10  # 10% du capital par trade
-        qty = (margin_used * leverage) / price if price > 0 else 0
+        sizing, sizing_err = RiskManager.calculate_position_size(
+            capital=capital,
+            entry_price=price,
+            sl=sl,
+            leverage=leverage,
+            risk_percentage=0.01,
+        )
+        qty = sizing.qty if sizing is not None else 0
         if qty <= 0:
             await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
             return
@@ -1264,12 +1293,18 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price   = float(result["indicators"]["price"])
         atr_val = float(result["indicators"].get("atr", price * 0.01))
         # Pour un SHORT : SL au-dessus, TP en-dessous
-        sl = price + ATR_MULTIPLIER_SL * atr_val
-        tp = price - RR_RATIO_TARGET * atr_val * leverage
+        sl = result.get("sl") if result.get("signal") == "SELL" and result.get("sl") else price + ATR_MULTIPLIER_SL * atr_val
+        tp = result.get("tp") if result.get("signal") == "SELL" and result.get("tp") else price - RR_RATIO_TARGET * atr_val
 
         capital    = paper_trader.get_capital(user_id)
-        margin_used = capital * 0.10
-        qty = (margin_used * leverage) / price if price > 0 else 0
+        sizing, sizing_err = RiskManager.calculate_position_size(
+            capital=capital,
+            entry_price=price,
+            sl=sl,
+            leverage=leverage,
+            risk_percentage=0.01,
+        )
+        qty = sizing.qty if sizing is not None else 0
         if qty <= 0:
             await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
             return
@@ -1435,17 +1470,17 @@ async def check_signal_outcomes(bot):
         if direction == "BUY":
             if current_price >= tp:
                 pnl_pct = round((current_price - entry) / entry * 100, 4)
-                history_mgr.update_signal_status(s["id"], "win", pnl_pct)
+                history_mgr.update_signal_status(s["id"], "win", pnl_pct, result_price=current_price)
             elif current_price <= sl:
                 pnl_pct = round((current_price - entry) / entry * 100, 4)
-                history_mgr.update_signal_status(s["id"], "loss", pnl_pct)
+                history_mgr.update_signal_status(s["id"], "loss", pnl_pct, result_price=current_price)
         elif direction == "SELL":
             if current_price <= tp:
                 pnl_pct = round((entry - current_price) / entry * 100, 4)
-                history_mgr.update_signal_status(s["id"], "win", pnl_pct)
+                history_mgr.update_signal_status(s["id"], "win", pnl_pct, result_price=current_price)
             elif current_price >= sl:
                 pnl_pct = round((entry - current_price) / entry * 100, 4)
-                history_mgr.update_signal_status(s["id"], "loss", pnl_pct)
+                history_mgr.update_signal_status(s["id"], "loss", pnl_pct, result_price=current_price)
 
 
 async def check_paper_exits(bot):
