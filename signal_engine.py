@@ -102,6 +102,10 @@ DEFAULT_ASSET_RULE = {
     "sr_buffer_factor": 1.00,
 }
 
+TREND_BULLISH = "HAUSSIER"
+TREND_BEARISH = "BAISSIER"
+TREND_NEUTRAL = "NEUTRE"
+
 
 class SignalEngine:
 
@@ -134,6 +138,114 @@ class SignalEngine:
             and required.issubset(df.columns)
             and len(df) >= min_len
         )
+
+    @staticmethod
+    def _clamp_score(score: float) -> int:
+        score = max(0, min(100, score))
+        return int(round(score))
+
+    @staticmethod
+    def _detect_timeframe_trend(df: Optional[pd.DataFrame]) -> str:
+        """Detecte la tendance avec la logique SMA deja utilisee par le moteur."""
+        if df is None or not SignalEngine._valid_df(df, min_len=50):
+            return TREND_NEUTRAL
+
+        close = df["Close"]
+        sma20_val = sma(close, 20).iloc[-1]
+        sma50_val = sma(close, 50).iloc[-1]
+        last_price = close.iloc[-1]
+
+        if pd.isna(last_price) or pd.isna(sma20_val) or pd.isna(sma50_val):
+            return TREND_NEUTRAL
+        if last_price > sma20_val > sma50_val:
+            return TREND_BULLISH
+        if last_price < sma20_val < sma50_val:
+            return TREND_BEARISH
+        return TREND_NEUTRAL
+
+    @staticmethod
+    def _resample_ohlc(df: pd.DataFrame, rule: str) -> Optional[pd.DataFrame]:
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return None
+
+        agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+        if "Volume" in df.columns:
+            agg["Volume"] = "sum"
+        resampled = df.resample(rule).agg(agg).dropna(subset=["Open", "High", "Low", "Close"])
+        return resampled if not resampled.empty else None
+
+    @staticmethod
+    def _infer_timeframe_minutes(df: pd.DataFrame) -> Optional[float]:
+        if not isinstance(df.index, pd.DatetimeIndex) or len(df.index) < 3:
+            return None
+
+        deltas = df.index.to_series().diff().dropna().dt.total_seconds() / 60
+        if deltas.empty:
+            return None
+        return float(deltas.median())
+
+    @staticmethod
+    def _compute_timeframe_trends(df: pd.DataFrame) -> Dict[str, str]:
+        """
+        Construit les tendances 1H, 4H, 1D a partir des donnees disponibles.
+
+        Quand l'index temporel est disponible, les timeframes superieurs sont
+        derives par resampling. Si la granularite source est plus haute que 1H,
+        les timeframes indisponibles restent neutres pour eviter une fausse
+        precision.
+        """
+        inferred_minutes = SignalEngine._infer_timeframe_minutes(df)
+        frames = {"1h": None, "4h": None, "1d": None}
+
+        if inferred_minutes is None:
+            frames["1h"] = df
+        elif inferred_minutes <= 90:
+            frames["1h"] = df
+            frames["4h"] = SignalEngine._resample_ohlc(df, "4h")
+            frames["1d"] = SignalEngine._resample_ohlc(df, "1D")
+        elif inferred_minutes <= 300:
+            frames["4h"] = df
+            frames["1d"] = SignalEngine._resample_ohlc(df, "1D")
+        else:
+            frames["1d"] = df
+
+        return {
+            "1h": SignalEngine._detect_timeframe_trend(frames["1h"]),
+            "4h": SignalEngine._detect_timeframe_trend(frames["4h"]),
+            "1d": SignalEngine._detect_timeframe_trend(frames["1d"]),
+        }
+
+    @staticmethod
+    def check_tf_alignment(tf_1h, tf_4h, tf_1d):
+        trends = [tf_1h, tf_4h, tf_1d]
+        bullish_count = trends.count(TREND_BULLISH)
+        bearish_count = trends.count(TREND_BEARISH)
+
+        if bullish_count == 3:
+            return {"status": "TOTAL", "direction": TREND_BULLISH, "modifier": 15}
+        if bearish_count == 3:
+            return {"status": "TOTAL", "direction": TREND_BEARISH, "modifier": 15}
+        if bullish_count > 0 and bearish_count > 0:
+            return {"status": "CONFLICT", "direction": TREND_NEUTRAL, "modifier": -15}
+        if bullish_count == 2:
+            return {"status": "PARTIAL", "direction": TREND_BULLISH, "modifier": 5}
+        if bearish_count == 2:
+            return {"status": "PARTIAL", "direction": TREND_BEARISH, "modifier": 5}
+        return {"status": "NEUTRAL", "direction": TREND_NEUTRAL, "modifier": 0}
+
+    @staticmethod
+    def _apply_tf_alignment_score(score: int, signal: str, tf_alignment: Dict) -> Tuple[int, Dict]:
+        alignment = (tf_alignment or {}).copy()
+        modifier = int(alignment.get("modifier", 0))
+        direction = alignment.get("direction", TREND_NEUTRAL)
+        signal_direction = TREND_BULLISH if signal == "BUY" else TREND_BEARISH
+
+        if modifier > 0 and direction != signal_direction:
+            modifier = -15
+            alignment["status"] = "CONFLICT"
+            alignment["modifier"] = modifier
+
+        return SignalEngine._clamp_score(score + modifier), alignment
 
     @staticmethod
     def _wait(
@@ -170,7 +282,7 @@ class SignalEngine:
             "reason": reason_text,
             "rejection_reason": reason_text,
             "risk_advice": "",
-            "teddy_score": score,
+            "teddy_score": SignalEngine._clamp_score(score),
             "confidence": get_text(lang, "confidence_low"),
             "sl": None,
             "tp": None,
@@ -250,6 +362,12 @@ class SignalEngine:
         # ── Tendances ──────────────────────────────────────────────────────────
         trend_bull = last_price > sma20 > sma50
         trend_bear = last_price < sma20 < sma50
+        timeframe_trends = SignalEngine._compute_timeframe_trends(df)
+        tf_alignment = SignalEngine.check_tf_alignment(
+            timeframe_trends["1h"],
+            timeframe_trends["4h"],
+            timeframe_trends["1d"],
+        )
 
         # ── Conditions de signal (seuils config.py intacts) ───────────────────
         buy_cond = [
@@ -288,6 +406,8 @@ class SignalEngine:
             "bb_lower":   lower_bb,
             "support":    support,
             "resistance": resistance,
+            "timeframe_trends": timeframe_trends,
+            "tf_alignment": tf_alignment,
         }
 
         return SignalEngine._finalize(
@@ -309,6 +429,7 @@ class SignalEngine:
             symbol=symbol,
             asset_class=asset_class,
             asset_rules=asset_rules,
+            tf_alignment=tf_alignment,
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -543,7 +664,7 @@ class SignalEngine:
                 volume_score = 3
 
         total = trend_score + pullback_score + momentum_score + adx_score + rr_score + rsi_score + sr_score + volume_score
-        total = max(0, min(100, total))
+        total = SignalEngine._clamp_score(total)
         detail = {"trend": trend_score, "pullback": pullback_score, "momentum": momentum_score, "adx": adx_score, "rr": rr_score, "rsi": rsi_score, "sr": sr_score, "volume": volume_score}
 
         return total, detail
@@ -568,6 +689,7 @@ class SignalEngine:
         symbol: str = "",
         asset_class: str = "generic",
         asset_rules: Optional[Dict] = None,
+        tf_alignment: Optional[Dict] = None,
     ) -> Dict:
         """
         Finalise le signal : SL/TP, scoring pondéré, filtres de rejet.
@@ -683,6 +805,13 @@ class SignalEngine:
             style=style,
             indicators=indicators,
         )
+        total_score, tf_alignment = SignalEngine._apply_tf_alignment_score(
+            total_score,
+            signal,
+            tf_alignment or indicators.get("tf_alignment", {}),
+        )
+        score_detail["multi_timeframe"] = tf_alignment.get("modifier", 0)
+        score_detail["timeframe_alignment"] = tf_alignment.get("status", "NEUTRAL")
 
         # ── 6. Filtres de rejet (retourne WAIT avec indicateurs conservés) ────
         base_thresholds = REJECTION_THRESHOLDS.get(style or "day", REJECTION_THRESHOLDS["day"])
@@ -741,7 +870,7 @@ class SignalEngine:
             "signal_text": get_text(lang, f"signal_{signal.lower()}"),
             "reason":      reason,
             "risk_advice": risk,
-            "teddy_score": min(total_score, 95),
+            "teddy_score": SignalEngine._clamp_score(total_score),
             "confidence":  get_text(lang, conf_key),
             "sl":          sl,
             "tp":          tp,

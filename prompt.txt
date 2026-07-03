@@ -1,86 +1,108 @@
-Tu continues le refactoring d’un projet de bot de trading Python.
+Tu es un développeur senior spécialisé en trading algorithmique Python.
 
-⚠️ IMPORTANT :
-Tu ne recommences pas depuis le début.
-Tu reprends EXACTEMENT là où le travail s’est arrêté.
+Tu dois modifier uniquement "signal_engine.py" pour ajouter un système d’alignement multi-timeframe.
 
 ---
 
-🧩 ÉTAT ACTUEL DU TRAVAIL (déjà terminé)
+🎯 OBJECTIF
 
-Les étapes suivantes ont déjà été complétées :
+Ajouter une logique d’analyse des tendances sur 3 timeframes :
 
-1. Inspect project structure and current trading flow
-2. Refactor signal engine with asset-aware parameters
-3. Add / integrate money management module
+- 1H (short-term)
+- 4H (mid-term)
+- 1D (long-term)
 
----
-
-❗ ÉTAPE EN COURS (INCOMPLÈTE)
-
-Tu étais en train de travailler sur :
-
-➡️ improve signal history records
-
-Cette étape n’est PAS terminée.
-Tu dois la reprendre et la finaliser proprement.
-
----
-
-🎯 OBJECTIF DE CETTE ÉTAPE
-
-Améliorer complètement le système d’historique des signaux afin qu’il puisse :
-
-- enregistrer tous les signaux générés (acceptés et rejetés)
-- stocker les raisons de validation ou rejet
-- lier chaque signal à :
-  - symbole
-  - score
-  - timeframe
-  - résultat final (WIN / LOSS si disponible)
-  - PnL si applicable
-  - paramètres utilisés (SL, TP, levier si existant)
-- permettre une analyse future fiable des performances du bot
+et intégrer leur alignement dans le score final du signal.
 
 ---
 
 ⚠️ CONTRAINTES IMPORTANTES
 
-- Ne change pas les modules déjà refactorisés sauf si nécessaire
-- Ne recommence pas le signal engine
-- Ne touche pas au money management sauf bug critique
-- Ne supprime aucune donnée existante sans migration ou compatibilité
-- L’historique doit rester compatible avec le reste du bot
+- Ne pas casser la logique existante du Signal Engine
+- Ne pas dépasser un score maximum de 100
+- Ne pas rendre le système instable ou non déterministe
+- Ne pas ajouter de nouveaux fichiers inutiles
 
 ---
 
-🧪 PHASE SUIVANTE OBLIGATOIRE
+🧠 LOGIQUE À AJOUTER
 
-Après avoir terminé l’amélioration de l’historique :
+1. Détection de tendance par timeframe
 
-➡️ exécuter run available checks and tests
+Pour chaque timeframe (1H, 4H, 1D), déterminer une tendance :
 
-Cette étape doit :
+- HAUSSIER
+- BAISSIER
+- NEUTRE
 
-- vérifier la cohérence globale du projet
-- détecter les erreurs ou régressions introduites
-- valider que les modules suivants fonctionnent ensemble :
-  - signal engine
-  - money management
-  - paper trading
-  - history system
+Utiliser les données déjà disponibles dans le projet (EMA, structure de prix, ou logique existante).
 
 ---
 
-📦 LIVRABLE ATTENDU
+2. Fonction d’alignement
 
-À la fin :
+Créer une fonction interne :
 
-- système d’historique complet et structuré
-- aucune régression sur les modules précédents
-- rapport de tests exécutés
-- confirmation que le bot est stable après refactor
+def check_tf_alignment(tf_1h, tf_4h, tf_1d):
 
 ---
 
-Commence directement par analyser l’état actuel de "signal history", puis termine l’implémentation et exécute les tests.
+3. Règle de scoring multi-timeframe
+
+Ajouter au score final :
+
+Cas 1 — ALIGNEMENT TOTAL (3/3 même direction)
+
+- +15 points au score
+- maximum score final = 100 (clamp obligatoire)
+
+Cas 2 — ALIGNEMENT PARTIEL (2/3 alignés)
+
+- +5 points au score
+
+Cas 3 — CONFLIT (directions opposées)
+
+- -15 points au score
+
+---
+
+4. RÈGLE CRITIQUE (TRÈS IMPORTANTE)
+
+Le score final doit être :
+
+score = max(0, min(100, score))
+
+➡️ Le score ne peut JAMAIS dépasser 100
+➡️ Le score ne peut JAMAIS être négatif
+
+---
+
+5. INTÉGRATION DANS LE SIGNAL ENGINE
+
+- Le multi-timeframe doit intervenir après le calcul du score de base
+- Il doit agir comme un modificateur de confiance, pas comme un nouveau système indépendant
+- Il doit être appliqué avant validation finale du signal
+
+---
+
+🎯 EXEMPLE LOGIQUE
+
+Score initial : 85
+
+- alignement 3/3 → +15 → 100 (clamp)
+- alignement 2/3 → +5 → 90
+- conflit → -15 → 70
+
+---
+
+🧪 LIVRABLE ATTENDU
+
+- Fonction multi-timeframe ajoutée
+- Intégration propre dans signal engine
+- Aucun dépassement de score possible
+- Aucun impact négatif sur les autres modules
+- Code lisible et facilement modifiable
+
+---
+
+Commence par analyser la structure actuelle du Signal Engine avant modification.
