@@ -1,76 +1,127 @@
+"""
+risk_manager.py
+----------------
+Toute la logique de gestion du risque :
+- calcul de la taille de position
+- vérification des limites (max positions, perte max journalière, cooldown)
+- whitelist / blacklist de symboles
+"""
+
+import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
+
+from trading_config import TradingConfig, record_daily_loss
+from binance_manager import get_account_balance
+from database import get_connection
 
 
-DEFAULT_RISK_PERCENTAGE = 0.01
-MAX_RISK_PERCENTAGE = 0.02
+@dataclass
+class RiskCheckResult:
+    allowed: bool
+    reason: Optional[str] = None
 
 
-@dataclass(frozen=True)
-class PositionSizing:
-    qty: float
-    risk_amount: float
-    sl_distance: float
-    notional: float
-    margin_required: float
-    risk_percentage: float
+def count_open_positions(user_id: int) -> int:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM trades WHERE user_id = %s AND status = 'open'",
+                (user_id,),
+            )
+            return cur.fetchone()[0]
+    finally:
+        conn.close()
 
 
-class RiskManager:
-    @staticmethod
-    def normalize_risk_percentage(risk_percentage: Optional[float]) -> float:
-        if risk_percentage is None:
-            return DEFAULT_RISK_PERCENTAGE
-        risk = float(risk_percentage)
-        if risk > 1:
-            risk = risk / 100.0
-        return max(0.0, min(risk, MAX_RISK_PERCENTAGE))
+def get_last_trade_time(user_id: int) -> Optional[float]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT opened_at FROM trades WHERE user_id = %s ORDER BY opened_at DESC LIMIT 1",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
 
-    @staticmethod
-    def calculate_position_size(
-        capital: float,
-        entry_price: float,
-        sl: float,
-        leverage: float = 1.0,
-        risk_percentage: Optional[float] = None,
-    ) -> Tuple[Optional[PositionSizing], Optional[str]]:
-        risk = RiskManager.normalize_risk_percentage(risk_percentage)
-        if capital <= 0:
-            return None, "Capital invalide"
-        if entry_price <= 0:
-            return None, "Prix d'entree invalide"
-        if leverage <= 0:
-            return None, "Levier invalide"
-        if sl is None or sl <= 0:
-            return None, "Stop Loss invalide"
-        if risk <= 0:
-            return None, "Risque par trade invalide"
 
-        sl_distance = abs(entry_price - sl)
-        if sl_distance <= 0:
-            return None, "Distance SL invalide"
+def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
+    if config.symbol_blacklist and symbol in config.symbol_blacklist:
+        return RiskCheckResult(False, f"{symbol} est dans ta blacklist.")
+    if config.symbol_whitelist and symbol not in config.symbol_whitelist:
+        return RiskCheckResult(False, f"{symbol} n'est pas dans ta whitelist.")
+    return RiskCheckResult(True)
 
-        risk_amount = capital * risk
-        qty = risk_amount / sl_distance
-        notional = qty * entry_price
-        margin_required = notional / leverage
 
-        if qty <= 0 or notional <= 0 or margin_required <= 0:
-            return None, "Taille de position incoherente"
-        if margin_required > capital:
-            scale = capital / margin_required
-            qty *= scale
-            notional = qty * entry_price
-            margin_required = capital
-            risk_amount = qty * sl_distance
-            if qty <= 0:
-                return None, "Capital insuffisant pour cette distance SL"
+def check_can_open_position(user_id: int, config: TradingConfig, symbol: str) -> RiskCheckResult:
+    """Vérifie toutes les règles de risque avant d'ouvrir une nouvelle position."""
 
-        return PositionSizing(
-            qty=qty,
-            risk_amount=risk_amount,
-            sl_distance=sl_distance,
-            notional=notional,
-            margin_required=margin_required,
-            risk_percentage=risk,
-        ), None
+    symbol_check = check_symbol_allowed(config, symbol)
+    if not symbol_check.allowed:
+        return symbol_check
+
+    open_count = count_open_positions(user_id)
+    if open_count >= config.max_positions:
+        return RiskCheckResult(
+            False, f"Nombre max de positions atteint ({config.max_positions})."
+        )
+
+    if config.daily_loss_accum and config.max_daily_loss:
+        try:
+            balance = get_account_balance(user_id, market_type=config.market_type)
+        except Exception:
+            balance = None
+        if balance:
+            loss_pct = (config.daily_loss_accum / balance) * 100
+            if loss_pct >= config.max_daily_loss:
+                return RiskCheckResult(
+                    False,
+                    f"Perte quotidienne max atteinte ({config.max_daily_loss}%). "
+                    f"Trading suspendu jusqu'à demain.",
+                )
+
+    if config.cooldown_seconds:
+        last_trade = get_last_trade_time(user_id)
+        if last_trade and (time.time() - last_trade) < config.cooldown_seconds:
+            remaining = int(config.cooldown_seconds - (time.time() - last_trade))
+            return RiskCheckResult(False, f"Cooldown actif, réessaie dans {remaining}s.")
+
+    return RiskCheckResult(True)
+
+
+def calculate_position_size(
+    user_id: int,
+    config: TradingConfig,
+    entry_price: float,
+    sl_price: float,
+    market_type: str = "futures",
+) -> float:
+    """
+    Taille de position basée sur le risque en % du capital et la distance au SL.
+    quantity = (capital * risk_per_trade%) / |entry_price - sl_price|
+    Pour futures, la quantité est ensuite multipliée virtuellement par le levier
+    (le levier change la marge utilisée, pas la taille notionnelle calculée ici).
+    """
+    balance = get_account_balance(user_id, market_type=market_type)
+    if balance <= 0:
+        raise ValueError("Solde insuffisant ou introuvable sur le compte Binance.")
+
+    risk_amount = balance * (config.risk_per_trade / 100)
+    price_distance = abs(entry_price - sl_price)
+
+    if price_distance <= 0:
+        raise ValueError("SL invalide : distance nulle avec le prix d'entrée.")
+
+    quantity = risk_amount / price_distance
+    return quantity
+
+
+def record_trade_loss(user_id: int, loss_usdt: float) -> float:
+    """À appeler quand un trade se ferme en perte (SL touché)."""
+    if loss_usdt <= 0:
+        return 0.0
+    return record_daily_loss(user_id, loss_usdt)
