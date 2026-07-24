@@ -189,11 +189,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
     user_id = update.effective_user.id
 
-    def safe_edit(text, keyboard):
+    async def safe_edit(text, keyboard):
         try:
-            return query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-        except:
-            return query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
     # --- Direction callbacks ---
     if data.startswith("paperdir_"):

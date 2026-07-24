@@ -295,7 +295,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             menu_callback,
-            pattern="^(menu_|cmd_|paperdir_|check_subscription|clearhistory_)"
+            pattern="^(menu_(?!autotrade|positions|trading_config)|cmd_|paperdir_|check_subscription|clearhistory_)"
         )
     )
 
