@@ -274,6 +274,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tf   = user_mgr.get_setting(uid, "timeframe", DEFAULT_TIMEFRAME)
         style = user_mgr.get_setting(uid, "trading_style", "day")
         style_names = {"day": "Day Trader", "swing": "Swing Trader", "position": "Position Trader"}
+        style_names.update({"scalping": "Scalping (5m)"})
         style_display = style_names.get(style, style)
         # Build recap as plain text to avoid Markdown entity errors from i18n strings
         recap = (
@@ -323,6 +324,9 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             style = cmd.split("_", 1)[1]
             user_mgr.set_setting(update.effective_user.id, "trading_style", style)
             style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)"}
+            if style == "scalping":
+                user_mgr.set_setting(update.effective_user.id, "timeframe", "5m")
+            style_names.update({"scalping": "Scalping (5m)"})
             await query.message.reply_text(f"Style set to: {style_names.get(style, style)}")
             return
 
@@ -383,11 +387,22 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(get_text(lang, "watchlist_scan_result", results="\n".join(results)), parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "settimeframe":
-            kb = [[InlineKeyboardButton("1h", callback_data="cmd_settimeframe_1h"), InlineKeyboardButton("4h", callback_data="cmd_settimeframe_4h"), InlineKeyboardButton("1d", callback_data="cmd_settimeframe_1d")]]
+            kb = [
+                [
+                    InlineKeyboardButton("5m", callback_data="cmd_settimeframe_5m"),
+                    InlineKeyboardButton("15m", callback_data="cmd_settimeframe_15m"),
+                ],
+                [
+                    InlineKeyboardButton("1h", callback_data="cmd_settimeframe_1h"),
+                    InlineKeyboardButton("4h", callback_data="cmd_settimeframe_4h"),
+                    InlineKeyboardButton("1d", callback_data="cmd_settimeframe_1d"),
+                ],
+            ]
             await query.message.reply_text(get_text(lang, "settimeframe_choose"), reply_markup=InlineKeyboardMarkup(kb))
 
         elif cmd == "setstyle":
             kb = [
+                [InlineKeyboardButton("Scalping (5m)", callback_data="cmd_setstyle_scalping")],
                 [InlineKeyboardButton("📊 Day Trader (1h)", callback_data="cmd_setstyle_day")],
                 [InlineKeyboardButton("📈 Swing Trader (4h)", callback_data="cmd_setstyle_swing")],
                 [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],
@@ -789,7 +804,8 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callb
         asset_class=result.get("asset_class"),
         params_used=result.get("params_used"),
     )
-    caption += f"\n\n🔐 ID: `{signal_id}`"
+    if signal_id:
+        caption += f"\n\n🔐 ID: `{signal_id}`"
     await msg.delete()
     if from_callback and update.callback_query:
         await update.callback_query.message.reply_photo(photo=buf, caption=caption, parse_mode=ParseMode.MARKDOWN)
@@ -999,6 +1015,7 @@ async def send_settings_menu(lang: str, tf: str, style: str, uid: int,
         "swing":    "Swing Trader",
         "position": "Position Trader",
     }
+    style_names.update({"scalping": "Scalping (5m)"})
     style_display = style_names.get(style, style)
 
     recap_lines = [
@@ -1048,7 +1065,7 @@ async def settimeframe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await respond(update, get_text(lang, "settimeframe_usage"))
         return
     tf = context.args[0]
-    if tf not in ("1h", "4h", "1d"):
+    if tf not in ("5m", "15m", "1h", "4h", "1d"):
         await respond(update, get_text(lang, "settimeframe_invalid"))
         return
     user_mgr.set_setting(update.effective_user.id, "timeframe", tf)

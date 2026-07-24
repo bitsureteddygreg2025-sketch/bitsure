@@ -19,7 +19,12 @@ from telegram.ext import ContextTypes
 from database import get_connection
 from trading_config import get_config, TradingConfig
 from risk_manager import check_can_open_position, calculate_position_size
-from binance_manager import open_position, get_price, BinanceClientError
+from binance_manager import (
+    open_position, get_price, get_tradable_symbols, get_klines_dataframe,
+    BinanceClientError,
+)
+from history_manager import HistoryManager
+from signal_engine import SignalEngine
 from trading_logger import get_trading_logger, log_trade_opened, log_error
 
 logger = get_trading_logger("execution_engine")
@@ -35,6 +40,7 @@ def fetch_pending_signals():
                 SELECT id, user_id, symbol, direction, entry_price, sl, tp, score
                 FROM signals
                 WHERE status IN ('pending', 'active')
+                  AND direction IN ('BUY', 'SELL')
                 ORDER BY id ASC
                 """
             )
@@ -218,3 +224,134 @@ async def scheduled_signal_scan(context: ContextTypes.DEFAULT_TYPE):
             await process_signal_for_user(context, signal)
         except Exception as e:
             log_error(logger, signal.get("user_id"), "scheduled_signal_scan", str(e))
+
+
+def _get_auto_trade_user_ids(interval_minutes: int) -> list[int]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id
+                FROM trading_config
+                WHERE auto_trade = TRUE
+                  AND analysis_interval_minutes = %s
+                """,
+                (interval_minutes,),
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _format_market_scan_report(
+    config: TradingConfig,
+    scanned: int,
+    saved: list[tuple[str, dict, str]],
+    rejected_by_risk: int,
+    errors: int,
+) -> str:
+    lines = [
+        "📊 *Rapport analyse marché Binance*",
+        f"Marché : `{config.market_type}` | TF : `{config.analysis_timeframe}` | Style : `{config.trading_style}`",
+        f"Symboles analysés : {scanned}",
+        f"Signaux actionnables : {len(saved)}",
+        f"Refus risque/config : {rejected_by_risk}",
+        f"Erreurs données/API : {errors}",
+    ]
+    if saved:
+        lines.append("")
+        lines.append("*Top signaux sauvegardés*")
+        for symbol, result, signal_id in saved[:10]:
+            lines.append(
+                f"`{symbol}` {result['signal']} score {result['teddy_score']} "
+                f"RR {result.get('rr_ratio') or 'N/A'} ID `{signal_id}`"
+            )
+    else:
+        lines.append("")
+        lines.append("Aucune position ouvrable sur ce cycle.")
+    return "\n".join(lines)
+
+
+async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval_minutes: int):
+    """
+    Analyse tous les symboles tradables Binance pour les utilisateurs AutoTrade
+    configurés sur l'intervalle demandé. Les WAIT ne sont jamais persistés.
+    """
+    history_mgr = HistoryManager.get_instance()
+    for user_id in _get_auto_trade_user_ids(interval_minutes):
+        config = get_config(user_id)
+        try:
+            symbols = get_tradable_symbols(config.market_type)
+        except Exception as e:
+            log_error(logger, user_id, "scheduled_market_analysis.symbols", str(e))
+            continue
+
+        if config.symbol_whitelist:
+            symbols = [s for s in symbols if s in config.symbol_whitelist]
+        if config.symbol_blacklist:
+            symbols = [s for s in symbols if s not in config.symbol_blacklist]
+
+        scanned = 0
+        rejected_by_risk = 0
+        errors = 0
+        saved: list[tuple[str, dict, str]] = []
+
+        for symbol in symbols:
+            try:
+                df = get_klines_dataframe(
+                    symbol,
+                    config.analysis_timeframe,
+                    market_type=config.market_type,
+                )
+                if df is None or df.empty:
+                    errors += 1
+                    continue
+
+                scanned += 1
+                result = SignalEngine.analyze(
+                    df,
+                    "fr",
+                    symbol=symbol,
+                    style=config.trading_style,
+                )
+                if result.get("signal") not in ("BUY", "SELL"):
+                    continue
+
+                risk_check = check_can_open_position(user_id, config, symbol)
+                if not risk_check.allowed:
+                    rejected_by_risk += 1
+                    continue
+
+                signal_id = history_mgr.add_signal(
+                    symbol=symbol,
+                    direction=result["signal"],
+                    price=float(result["indicators"]["price"]),
+                    timeframe=config.analysis_timeframe,
+                    signal_type="market_scan",
+                    score=result.get("teddy_score", 0),
+                    sl=result.get("sl"),
+                    tp=result.get("tp"),
+                    user_id=user_id,
+                    validation_status=result.get("validation_status", "VALIDATED"),
+                    validation_reason=result.get("reason"),
+                    rejection_reason=result.get("rejection_reason"),
+                    rr_ratio=result.get("rr_ratio"),
+                    asset_class=result.get("asset_class"),
+                    params_used={
+                        **(result.get("params_used") or {}),
+                        "market_type": config.market_type,
+                        "analysis_interval_minutes": interval_minutes,
+                    },
+                )
+                if signal_id:
+                    saved.append((symbol, result, signal_id))
+            except Exception as e:
+                errors += 1
+                log_error(logger, user_id, f"scheduled_market_analysis.{symbol}", str(e))
+
+        report = _format_market_scan_report(config, scanned, saved, rejected_by_risk, errors)
+        try:
+            await context.bot.send_message(chat_id=user_id, text=report, parse_mode="Markdown")
+        except Exception as e:
+            log_error(logger, user_id, "scheduled_market_analysis.report", str(e))

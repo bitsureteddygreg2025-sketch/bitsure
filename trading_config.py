@@ -35,8 +35,22 @@ DEFAULTS = {
     "trailing_stop": os.getenv("DEFAULT_TRAILING_STOP", "False") == "True",
     "dca_enabled": os.getenv("DEFAULT_DCA_ENABLED", "False") == "True",
     "market_type": os.getenv("DEFAULT_MARKET_TYPE", "futures"),
+    "trading_style": os.getenv("DEFAULT_TRADING_STYLE", "day"),
+    "analysis_timeframe": os.getenv("DEFAULT_ANALYSIS_TIMEFRAME", "1h"),
+    "analysis_interval_minutes": int(os.getenv("DEFAULT_ANALYSIS_INTERVAL_MINUTES", 5)),
     "testnet": os.getenv("BINANCE_TESTNET", "True") == "True",
 }
+
+
+def _coerce_symbol_list(value) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item).upper() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.replace(";", ",").split(",")
+        return [item.strip().upper() for item in raw if item.strip()]
+    return []
 
 
 @dataclass
@@ -56,6 +70,9 @@ class TradingConfig:
     symbol_whitelist: List[str] = field(default_factory=list)
     symbol_blacklist: List[str] = field(default_factory=list)
     market_type: str = DEFAULTS["market_type"]
+    trading_style: str = DEFAULTS["trading_style"]
+    analysis_timeframe: str = DEFAULTS["analysis_timeframe"]
+    analysis_interval_minutes: int = DEFAULTS["analysis_interval_minutes"]
     testnet: bool = DEFAULTS["testnet"]
     cooldown_seconds: int = 0
     daily_loss_accum: float = 0.0
@@ -70,8 +87,9 @@ def ensure_config_row(user_id: int) -> None:
                 """
                 INSERT INTO trading_config (user_id, auto_trade, leverage, risk_per_trade,
                     max_positions, min_score, max_daily_loss, trailing_stop, dca_enabled,
-                    market_type, testnet)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    market_type, trading_style, analysis_timeframe,
+                    analysis_interval_minutes, testnet)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO NOTHING
                 """,
                 (
@@ -79,7 +97,9 @@ def ensure_config_row(user_id: int) -> None:
                     DEFAULTS["risk_per_trade"], DEFAULTS["max_positions"],
                     DEFAULTS["min_score"], DEFAULTS["max_daily_loss"],
                     DEFAULTS["trailing_stop"], DEFAULTS["dca_enabled"],
-                    DEFAULTS["market_type"], DEFAULTS["testnet"],
+                    DEFAULTS["market_type"], DEFAULTS["trading_style"],
+                    DEFAULTS["analysis_timeframe"],
+                    DEFAULTS["analysis_interval_minutes"], DEFAULTS["testnet"],
                 ),
             )
         conn.commit()
@@ -97,8 +117,9 @@ def get_config(user_id: int) -> TradingConfig:
                 SELECT user_id, auto_trade, leverage, risk_per_trade, max_positions,
                        min_score, max_daily_loss, trailing_stop, trailing_stop_pct,
                        dca_enabled, dca_steps, dca_step_pct, symbol_whitelist,
-                       symbol_blacklist, market_type, testnet, cooldown_seconds,
-                       daily_loss_accum
+                       symbol_blacklist, market_type, trading_style,
+                       analysis_timeframe, analysis_interval_minutes, testnet,
+                       cooldown_seconds, daily_loss_accum
                 FROM trading_config WHERE user_id = %s
                 """,
                 (user_id,),
@@ -115,9 +136,14 @@ def get_config(user_id: int) -> TradingConfig:
         max_positions=row[4], min_score=row[5], max_daily_loss=row[6],
         trailing_stop=row[7], trailing_stop_pct=row[8], dca_enabled=row[9],
         dca_steps=row[10], dca_step_pct=row[11],
-        symbol_whitelist=row[12] or [], symbol_blacklist=row[13] or [],
-        market_type=row[14], testnet=row[15], cooldown_seconds=row[16] or 0,
-        daily_loss_accum=row[17] or 0.0,
+        symbol_whitelist=_coerce_symbol_list(row[12]),
+        symbol_blacklist=_coerce_symbol_list(row[13]),
+        market_type=row[14] or DEFAULTS["market_type"],
+        trading_style=row[15] or DEFAULTS["trading_style"],
+        analysis_timeframe=row[16] or DEFAULTS["analysis_timeframe"],
+        analysis_interval_minutes=row[17] or DEFAULTS["analysis_interval_minutes"],
+        testnet=row[18], cooldown_seconds=row[19] or 0,
+        daily_loss_accum=row[20] or 0.0,
     )
 
 
@@ -133,6 +159,8 @@ def update_config(user_id: int, **fields) -> TradingConfig:
     for key, value in fields.items():
         if key not in allowed:
             continue
+        if key in {"symbol_whitelist", "symbol_blacklist"} and isinstance(value, list):
+            value = ",".join(str(item).upper() for item in value if str(item).strip())
         set_clauses.append(f"{key} = %s")
         values.append(value)
 

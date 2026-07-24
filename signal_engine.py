@@ -13,6 +13,7 @@ from i18n import get_text
 # =========================================================
 
 STYLE_CONFIG = {
+    "scalping": {"sl_mult": 0.70, "tp_mult": 1.25},
     "day":      {"sl_mult": 1.15, "tp_mult": 2.2},
     "swing":    {"sl_mult": 1.75, "tp_mult": 3.5},
     "position": {"sl_mult": 2.5,  "tp_mult": 5.0},
@@ -32,6 +33,7 @@ SCORE_WEIGHTS = {
 
 # Seuils de rejet par style
 REJECTION_THRESHOLDS = {
+    "scalping": {"min_score": 62, "min_adx": 18, "min_rr": 1.1},
     "day":      {"min_score": 60, "min_adx": 15, "min_rr": 1.3},
     "swing":    {"min_score": 58, "min_adx": 15, "min_rr": 1.5},
     "position": {"min_score": 55, "min_adx": 15, "min_rr": 1.8},
@@ -39,6 +41,7 @@ REJECTION_THRESHOLDS = {
 
 # Buffer S/R par style (multiplicateur de l'ATR)
 BUFFER_MULTIPLIERS = {
+    "scalping": 0.10,
     "day":      0.15,
     "swing":    0.20,
     "position": 0.25,
@@ -735,7 +738,7 @@ class SignalEngine:
             elif len(close_vals) >= 6:
                 close_5_ago = close_vals[-6]
                 recent_move = (price - close_5_ago) / atr_val
-                thresholds = {"day": 2.0, "swing": 2.5, "position": 3.0}
+                thresholds = {"scalping": 1.4, "day": 2.0, "swing": 2.5, "position": 3.0}
                 limit = thresholds.get(style, 2.0) * asset_rules.get("overextension_factor", 1.0)
                 if signal == "BUY" and recent_move > limit:
                     return SignalEngine._wait(

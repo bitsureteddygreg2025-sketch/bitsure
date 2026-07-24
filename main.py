@@ -109,7 +109,7 @@ from trading_handlers import (
     cmd_emergency_stop,
     trading_callback_router,
 )
-from execution_engine import scheduled_signal_scan
+from execution_engine import scheduled_market_analysis, scheduled_signal_scan
 from position_manager import monitor_open_positions
 
 autotrade_scheduler = None
@@ -124,6 +124,16 @@ def start_autotrade_scheduler(app):
         scheduled_signal_scan, "interval", seconds=20,
         kwargs={"context": app},
         id="scheduled_signal_scan", replace_existing=True
+    )
+    autotrade_scheduler.add_job(
+        scheduled_market_analysis, "interval", minutes=5,
+        kwargs={"context": app, "interval_minutes": 5},
+        id="market_analysis_5m", replace_existing=True
+    )
+    autotrade_scheduler.add_job(
+        scheduled_market_analysis, "interval", minutes=10,
+        kwargs={"context": app, "interval_minutes": 10},
+        id="market_analysis_10m", replace_existing=True
     )
     autotrade_scheduler.add_job(
         monitor_open_positions, "interval", seconds=15,
@@ -316,7 +326,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             trading_callback_router,
-            pattern="^(menu_autotrade|toggle_autotrade|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
+            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
         )
     )
 

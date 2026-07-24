@@ -84,6 +84,9 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚙️ *Configuration de trading*\n\n"
         f"Mode auto : {'ON' if config.auto_trade else 'OFF'}\n"
         f"Marché : {config.market_type}\n"
+        f"Style : {config.trading_style}\n"
+        f"Timeframe analyse : {config.analysis_timeframe}\n"
+        f"Analyse auto : toutes les {config.analysis_interval_minutes} min\n"
         f"Levier : x{config.leverage}\n"
         f"Risque par trade : {config.risk_per_trade}%\n"
         f"Max positions : {config.max_positions}\n"
@@ -275,14 +278,102 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         config = get_config(user_id)
         status = "ON ✅" if config.auto_trade else "OFF ❌"
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"Basculer (actuellement {status})", callback_data="toggle_autotrade")]
+            [InlineKeyboardButton(f"Basculer (actuellement {status})", callback_data="toggle_autotrade")],
+            [InlineKeyboardButton("Mode spot/futures", callback_data="menu_market_mode")],
+            [InlineKeyboardButton("Analyse periodique", callback_data="menu_analysis_config")],
+            [InlineKeyboardButton("Configuration", callback_data="menu_trading_config")],
         ])
-        await query.edit_message_text(f"Mode automatique : {status}", reply_markup=keyboard)
+        await query.edit_message_text(
+            f"Mode automatique : {status}\n"
+            f"Marche : {config.market_type}\n"
+            f"Analyse : {config.analysis_timeframe} / {config.analysis_interval_minutes} min\n"
+            f"Style : {config.trading_style}",
+            reply_markup=keyboard,
+        )
 
     elif data == "toggle_autotrade":
         config = get_config(user_id)
         update_config(user_id, auto_trade=not config.auto_trade)
         await query.edit_message_text("Configuration mise à jour. Relance /autotrade pour voir le nouvel état.")
+
+    elif data == "menu_market_mode":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Spot", callback_data="set_market_spot"),
+                InlineKeyboardButton("Futures", callback_data="set_market_futures"),
+            ],
+            [InlineKeyboardButton("Retour AutoTrade", callback_data="menu_autotrade")],
+        ])
+        await query.edit_message_text(
+            f"Mode de marche actuel : {config.market_type}\nChoisis le mode a utiliser.",
+            reply_markup=keyboard,
+        )
+
+    elif data.startswith("set_market_"):
+        market_type = data.replace("set_market_", "")
+        if market_type not in ("spot", "futures"):
+            await query.edit_message_text("Mode de marche invalide.")
+            return
+        update_config(user_id, market_type=market_type)
+        await query.edit_message_text(f"Mode de marche mis a jour : {market_type}")
+
+    elif data == "menu_analysis_config":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("5 min", callback_data="set_analysis_interval_5"),
+                InlineKeyboardButton("10 min", callback_data="set_analysis_interval_10"),
+            ],
+            [
+                InlineKeyboardButton("5m", callback_data="set_analysis_tf_5m"),
+                InlineKeyboardButton("15m", callback_data="set_analysis_tf_15m"),
+                InlineKeyboardButton("1h", callback_data="set_analysis_tf_1h"),
+            ],
+            [
+                InlineKeyboardButton("Scalping", callback_data="set_analysis_style_scalping"),
+                InlineKeyboardButton("Day", callback_data="set_analysis_style_day"),
+            ],
+            [
+                InlineKeyboardButton("Swing", callback_data="set_analysis_style_swing"),
+                InlineKeyboardButton("Position", callback_data="set_analysis_style_position"),
+            ],
+            [InlineKeyboardButton("Retour AutoTrade", callback_data="menu_autotrade")],
+        ])
+        await query.edit_message_text(
+            f"Analyse periodique\n"
+            f"Intervalle : {config.analysis_interval_minutes} min\n"
+            f"Timeframe : {config.analysis_timeframe}\n"
+            f"Style : {config.trading_style}",
+            reply_markup=keyboard,
+        )
+
+    elif data.startswith("set_analysis_interval_"):
+        interval = int(data.replace("set_analysis_interval_", ""))
+        if interval not in (5, 10):
+            await query.edit_message_text("Intervalle invalide.")
+            return
+        update_config(user_id, analysis_interval_minutes=interval)
+        await query.edit_message_text(f"Analyse periodique configuree toutes les {interval} minutes.")
+
+    elif data.startswith("set_analysis_tf_"):
+        timeframe = data.replace("set_analysis_tf_", "")
+        if timeframe not in ("5m", "15m", "1h", "4h", "1d"):
+            await query.edit_message_text("Timeframe invalide.")
+            return
+        update_config(user_id, analysis_timeframe=timeframe)
+        await query.edit_message_text(f"Timeframe d'analyse mis a jour : {timeframe}")
+
+    elif data.startswith("set_analysis_style_"):
+        style = data.replace("set_analysis_style_", "")
+        if style not in ("scalping", "day", "swing", "position"):
+            await query.edit_message_text("Style de trading invalide.")
+            return
+        fields = {"trading_style": style}
+        if style == "scalping":
+            fields["analysis_timeframe"] = "5m"
+        update_config(user_id, **fields)
+        await query.edit_message_text(f"Style d'analyse mis a jour : {style}")
 
     elif data == "menu_positions":
         trades = get_open_trades(user_id)
@@ -296,6 +387,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         config = get_config(user_id)
         await query.edit_message_text(
             f"Levier x{config.leverage} | Risque {config.risk_per_trade}% | "
+            f"Marche {config.market_type} | Analyse {config.analysis_timeframe}/{config.analysis_interval_minutes}m | Style {config.trading_style}\n"
             f"Max positions {config.max_positions}\nUtilise /config pour le détail complet."
         )
 

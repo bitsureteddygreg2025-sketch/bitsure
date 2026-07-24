@@ -83,7 +83,12 @@ class HistoryManager:
                    leverage: Optional[float] = None,
                    capital_before: Optional[float] = None,
                    capital_after: Optional[float] = None,
-                   pnl: Optional[float] = None) -> str:
+                   pnl: Optional[float] = None) -> Optional[str]:
+        if (direction or "").upper() == "WAIT":
+            logger.info("Signal WAIT ignore: %s %s", symbol, timeframe)
+            return None
+
+        direction = (direction or "").upper()
         signal_id = hashlib.md5(f"{symbol}{direction}{price}{timeframe}{time.time()}".encode()).hexdigest()[:8]
         now = time.time()
         validation_status = (validation_status or "VALIDATED").upper()

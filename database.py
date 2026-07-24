@@ -248,6 +248,9 @@ def _ensure_schema(conn):
             symbol_whitelist TEXT DEFAULT '',
             symbol_blacklist TEXT DEFAULT '',
             market_type TEXT DEFAULT 'futures',
+            trading_style TEXT DEFAULT 'day',
+            analysis_timeframe TEXT DEFAULT '1h',
+            analysis_interval_minutes INT DEFAULT 5,
             testnet BOOLEAN DEFAULT TRUE,
             cooldown_seconds INT DEFAULT 0,
             daily_loss_accum DOUBLE PRECISION DEFAULT 0.0,
@@ -255,6 +258,9 @@ def _ensure_schema(conn):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS trading_style TEXT DEFAULT 'day'",
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_timeframe TEXT DEFAULT '1h'",
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_interval_minutes INT DEFAULT 5",
         """
         CREATE TABLE IF NOT EXISTS binance_credentials (
             user_id BIGINT PRIMARY KEY,

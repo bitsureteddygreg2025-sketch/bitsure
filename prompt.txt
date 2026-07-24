@@ -1,108 +1,53 @@
-Tu es un développeur senior spécialisé en trading algorithmique Python.
+Tu es une IA senior chargée de développer et d’améliorer un bot de trading déjà existant.
 
-Tu dois modifier uniquement "signal_engine.py" pour ajouter un système d’alignement multi-timeframe.
+Avant toute modification, tu dois te ressourcer dans le code déjà présent, lire le projet existant, comprendre son architecture, ses conventions, ses menus, sa logique métier, sa base de données, et ses flux actuels. Tu ne dois pas repartir de zéro. Tu dois t’appuyer sur le code en place, en respectant sa structure autant que possible.
 
----
+Ta mission est de mettre en œuvre uniquement les besoins suivants, sans inventer de fonctionnalités non demandées :
 
-🎯 OBJECTIF
+1. Organisation des commandes et des menus
 
-Ajouter une logique d’analyse des tendances sur 3 timeframes :
+- Chaque commande doit être placée soit dans un sous-menu, soit dans un menu principal.
+- Le choix dépend de la nature de la commande :
+  - si la commande appartient à une catégorie, elle doit aller dans le menu de cette catégorie ;
+  - si la commande représente une catégorie à elle seule, elle doit devenir un menu principal.
+- La navigation doit rester claire, logique et cohérente.
 
-- 1H (short-term)
-- 4H (mid-term)
-- 1D (long-term)
+2. Sélection du mode de trading
 
-et intégrer leur alignement dans le score final du signal.
+- Ajouter une option permettant de choisir temporairement entre :
+  - spot
+  - futures
+- Ce choix doit être accessible dans un menu spécifique dédié à cette sélection.
+- Le bot doit pouvoir utiliser ce mode sélectionné pendant la session ou pendant la période prévue par la logique du projet.
 
----
+3. Nouveau style de trading
 
-⚠️ CONTRAINTES IMPORTANTES
+- Ajouter la possibilité de trader en scalping sur timeframe 5 minutes.
+- Ajouter aussi un autre timeframe en plus de celui-ci.
+- Le système doit être capable de distinguer ce nouveau style de trading des autres styles déjà existants.
 
-- Ne pas casser la logique existante du Signal Engine
-- Ne pas dépasser un score maximum de 100
-- Ne pas rendre le système instable ou non déterministe
-- Ne pas ajouter de nouveaux fichiers inutiles
+4. Analyse périodique du marché
 
----
+- Le bot doit analyser automatiquement le marché toutes les 5 minutes ou toutes les 10 minutes selon la configuration choisie.
+- À chaque analyse, il doit parcourir tous les symboles tradables sur Binance.
+- Pour chaque symbole, il doit déterminer s’il peut ouvrir une position ou non.
+- À la fin de l’analyse, il doit produire un rapport clair du résultat.
 
-🧠 LOGIQUE À AJOUTER
+5. Gestion des signaux Wait
 
-1. Détection de tendance par timeframe
+- Les signaux “Wait” ne doivent pas être enregistrés.
+- Ils ne doivent être sauvegardés ni dans la base de données, ni dans l’historique.
+- Ils ne doivent pas être traités comme des résultats persistants.
+- Seuls les signaux réellement utiles doivent être conservés.
 
-Pour chaque timeframe (1H, 4H, 1D), déterminer une tendance :
+Contraintes d’implémentation :
 
-- HAUSSIER
-- BAISSIER
-- NEUTRE
+- Ne casse pas l’existant.
+- Réutilise le code déjà présent quand c’est possible.
+- Garde une architecture propre, lisible et extensible.
+- Adapte les modifications au projet actuel au lieu d’écrire une solution générique détachée du code existant.
+- Vérifie les impacts sur les menus, la logique de trading, la persistance des données, et le système de rapport.
+- Si quelque chose dépend d’une partie du code déjà présente, base-toi d’abord sur cette base avant d’écrire du nouveau code.
 
-Utiliser les données déjà disponibles dans le projet (EMA, structure de prix, ou logique existante).
-
----
-
-2. Fonction d’alignement
-
-Créer une fonction interne :
-
-def check_tf_alignment(tf_1h, tf_4h, tf_1d):
-
----
-
-3. Règle de scoring multi-timeframe
-
-Ajouter au score final :
-
-Cas 1 — ALIGNEMENT TOTAL (3/3 même direction)
-
-- +15 points au score
-- maximum score final = 100 (clamp obligatoire)
-
-Cas 2 — ALIGNEMENT PARTIEL (2/3 alignés)
-
-- +5 points au score
-
-Cas 3 — CONFLIT (directions opposées)
-
-- -15 points au score
-
----
-
-4. RÈGLE CRITIQUE (TRÈS IMPORTANTE)
-
-Le score final doit être :
-
-score = max(0, min(100, score))
-
-➡️ Le score ne peut JAMAIS dépasser 100
-➡️ Le score ne peut JAMAIS être négatif
-
----
-
-5. INTÉGRATION DANS LE SIGNAL ENGINE
-
-- Le multi-timeframe doit intervenir après le calcul du score de base
-- Il doit agir comme un modificateur de confiance, pas comme un nouveau système indépendant
-- Il doit être appliqué avant validation finale du signal
-
----
-
-🎯 EXEMPLE LOGIQUE
-
-Score initial : 85
-
-- alignement 3/3 → +15 → 100 (clamp)
-- alignement 2/3 → +5 → 90
-- conflit → -15 → 70
-
----
-
-🧪 LIVRABLE ATTENDU
-
-- Fonction multi-timeframe ajoutée
-- Intégration propre dans signal engine
-- Aucun dépassement de score possible
-- Aucun impact négatif sur les autres modules
-- Code lisible et facilement modifiable
-
----
-
-Commence par analyser la structure actuelle du Signal Engine avant modification.
+Objectif final :
+un bot cohérent, structuré, capable de gérer les menus, le choix spot/futures, le scalping 5 minutes, l’analyse périodique de tous les symboles Binance, et l’exclusion totale des signaux “Wait” du stockage.

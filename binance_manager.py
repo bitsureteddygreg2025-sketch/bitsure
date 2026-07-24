@@ -11,6 +11,7 @@ import logging
 import math
 from typing import Optional, Literal
 
+import pandas as pd
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 
@@ -38,6 +39,59 @@ def _client_for_user(user_id: int) -> Client:
 
     client = Client(creds["api_key"], creds["api_secret"], testnet=creds["testnet"])
     return client
+
+
+def _public_client() -> Client:
+    return Client()
+
+
+def get_tradable_symbols(market_type: MarketType = "futures", quote_asset: str = "USDT") -> list[str]:
+    """Return active Binance symbols for the requested market and quote asset."""
+    client = _public_client()
+    try:
+        info = client.futures_exchange_info() if market_type == "futures" else client.get_exchange_info()
+        symbols = []
+        for item in info.get("symbols", []):
+            if item.get("quoteAsset") != quote_asset:
+                continue
+            if item.get("status") != "TRADING":
+                continue
+            symbols.append(item["symbol"])
+        return sorted(set(symbols))
+    except BinanceAPIException as e:
+        raise BinanceClientError(f"Erreur Binance (liste symboles) : {e.message}")
+
+
+def get_klines_dataframe(
+    symbol: str,
+    timeframe: str,
+    market_type: MarketType = "futures",
+    limit: int = 500,
+) -> Optional[pd.DataFrame]:
+    """Fetch public Binance OHLCV data as a DataFrame compatible with SignalEngine."""
+    client = _public_client()
+    try:
+        if market_type == "futures":
+            klines = client.futures_klines(symbol=symbol, interval=timeframe, limit=limit)
+        else:
+            klines = client.get_klines(symbol=symbol, interval=timeframe, limit=limit)
+    except BinanceAPIException as e:
+        raise BinanceClientError(f"Erreur Binance (historique {symbol}) : {e.message}")
+
+    if not klines:
+        return None
+
+    df = pd.DataFrame(
+        klines,
+        columns=[
+            "OpenTime", "Open", "High", "Low", "Close", "Volume",
+            "CloseTime", "QuoteAssetVolume", "NumberOfTrades",
+            "TakerBuyBaseVolume", "TakerBuyQuoteVolume", "Ignore",
+        ],
+    )
+    df["Date"] = pd.to_datetime(df["OpenTime"], unit="ms")
+    df.set_index("Date", inplace=True)
+    return df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
 
 
 def get_price(user_id: int, symbol: str, market_type: MarketType = "futures") -> float:
