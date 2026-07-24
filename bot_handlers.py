@@ -189,11 +189,22 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
     user_id = update.effective_user.id
 
-    async def safe_edit(text, keyboard):
+    async def safe_edit(text, keyboard, parse_mode=None):
+        """Edit message with automatic fallback: tries with parse_mode first, then plain text."""
+        markup = InlineKeyboardMarkup(keyboard)
         try:
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(text, reply_markup=markup, parse_mode=parse_mode)
         except Exception:
-            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+            try:
+                # Fallback: send as plain text (strips all markdown)
+                plain = text.replace("*", "").replace("_", " ").replace("`", "")
+                await query.edit_message_text(plain, reply_markup=markup)
+            except Exception:
+                try:
+                    plain = text.replace("*", "").replace("_", " ").replace("`", "")
+                    await query.message.reply_text(plain, reply_markup=markup)
+                except Exception:
+                    pass
 
     # --- Direction callbacks ---
     if data.startswith("paperdir_"):
@@ -213,7 +224,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_levels"), callback_data="cmd_levels")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
-        await safe_edit(f"*{get_text(lang, 'menu_analyse')}*\n{get_text(lang, 'menu_choose_command')}", keyboard)
+        await safe_edit(
+            f"{get_text(lang, 'menu_analyse')}\n{get_text(lang, 'menu_choose_command')}",
+            keyboard
+        )
 
     elif data == "menu_paper":
         keyboard = [
@@ -223,7 +237,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_paper_stats"), callback_data="cmd_paper_stats")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
-        await safe_edit(f"*{get_text(lang, 'menu_paper')}*\n{get_text(lang, 'menu_choose_command')}", keyboard)
+        await safe_edit(
+            f"{get_text(lang, 'menu_paper')}\n{get_text(lang, 'menu_choose_command')}",
+            keyboard
+        )
 
     elif data == "menu_alertes":
         keyboard = [
@@ -233,7 +250,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_clearalerts"), callback_data="cmd_clearalerts")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
-        await safe_edit(f"*{get_text(lang, 'menu_alertes')}*\n{get_text(lang, 'menu_choose_command')}", keyboard)
+        await safe_edit(
+            f"{get_text(lang, 'menu_alertes')}\n{get_text(lang, 'menu_choose_command')}",
+            keyboard
+        )
 
     elif data == "menu_watchlist":
         keyboard = [
@@ -243,7 +263,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_scan"), callback_data="cmd_scan")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
-        await safe_edit(f"*{get_text(lang, 'menu_watchlist')}*\n{get_text(lang, 'menu_choose_command')}", keyboard)
+        await safe_edit(
+            f"{get_text(lang, 'menu_watchlist')}\n{get_text(lang, 'menu_choose_command')}",
+            keyboard
+        )
 
     elif data == "menu_parametres":
         lang = get_user_lang(update)
@@ -252,12 +275,13 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         style = user_mgr.get_setting(uid, "trading_style", "day")
         style_names = {"day": "Day Trader", "swing": "Swing Trader", "position": "Position Trader"}
         style_display = style_names.get(style, style)
+        # Build recap as plain text to avoid Markdown entity errors from i18n strings
         recap = (
-            get_text(lang, "settings_title") + "\n"
-            + get_text(lang, "settings_timeframe") + " : " + tf + "\n"
-            + get_text(lang, "settings_style") + " : " + style_display + "\n"
-            + get_text(lang, "settings_lang") + " : " + lang.upper() + "\n\n"
-            + get_text(lang, "settings_edit")
+            "⚙️ Settings\n"
+            f"Timeframe : {tf}\n"
+            f"Style : {style_display}\n"
+            f"Language : {lang.upper()}\n\n"
+            "Use the buttons below to change your settings."
         )
         keyboard = [
             [InlineKeyboardButton(get_text(lang, "btn_settimeframe"), callback_data="cmd_settimeframe")],
@@ -267,7 +291,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_support"), callback_data="cmd_support")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")],
         ]
-        await safe_edit(recap, keyboard)
+        await safe_edit(recap, keyboard)  # plain text, no parse_mode
     elif data == "menu_back":
         keyboard = [
             [InlineKeyboardButton(get_text(lang, "menu_analyse"), callback_data="menu_analyse")],
