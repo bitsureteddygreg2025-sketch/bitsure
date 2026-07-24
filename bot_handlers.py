@@ -26,7 +26,6 @@ from utils import format_number, is_valid_symbol, normalize_symbol
 from i18n import get_text
 from payments import generate_binance_payment
 from paper_trader import PaperTrader
-from risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 fetcher = DataFetcher.get_instance()
