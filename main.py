@@ -89,7 +89,49 @@ from admin_handlers import (
     confirm_payment,
     refreshhistory,
     clearhistory,
+    admin_cmd_trading_stats,
+    admin_cmd_trades,
+    admin_cmd_forceclose,
 )
+
+from trading_handlers import (
+    cmd_setapikeys,
+    cmd_autotrade,
+    cmd_config,
+    cmd_positions,
+    cmd_close,
+    cmd_pnl,
+    cmd_trade_history,
+    cmd_setleverage,
+    cmd_setrisk,
+    cmd_whitelist,
+    cmd_blacklist,
+    cmd_emergency_stop,
+    trading_callback_router,
+)
+from execution_engine import scheduled_signal_scan
+from position_manager import monitor_open_positions
+
+autotrade_scheduler = None
+
+def start_autotrade_scheduler(app):
+    global autotrade_scheduler
+    if autotrade_scheduler is not None:
+        return
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    autotrade_scheduler = AsyncIOScheduler(timezone="UTC")
+    autotrade_scheduler.add_job(
+        scheduled_signal_scan, "interval", seconds=20,
+        kwargs={"context": app},
+        id="scheduled_signal_scan", replace_existing=True
+    )
+    autotrade_scheduler.add_job(
+        monitor_open_positions, "interval", seconds=15,
+        kwargs={"context": app},
+        id="monitor_open_positions", replace_existing=True
+    )
+    autotrade_scheduler.start()
+
 
 # =========================================================
 # LOGGING
@@ -140,6 +182,12 @@ def main():
     except Exception as e:
         logger.warning(f"Alert monitoring failed: {e}")
 
+    try:
+        start_autotrade_scheduler(app)
+        logger.info("AutoTrade scheduler started.")
+    except Exception as e:
+        logger.warning(f"AutoTrade scheduler failed: {e}")
+
     # =====================================================
     # COMMANDS
     # =====================================================
@@ -174,6 +222,21 @@ def main():
         ("pay_binance", pay_binance),
         ("historique", historique),
 
+        # ================= AUTOTRADE =================
+
+        ("setapikeys", cmd_setapikeys),
+        ("autotrade", cmd_autotrade),
+        ("config", cmd_config),
+        ("positions", cmd_positions),
+        ("close", cmd_close),
+        ("pnl", cmd_pnl),
+        ("history_trades", cmd_trade_history),
+        ("setleverage", cmd_setleverage),
+        ("setrisk", cmd_setrisk),
+        ("whitelist", cmd_whitelist),
+        ("blacklist", cmd_blacklist),
+        ("emergency_stop", cmd_emergency_stop),
+
         # ================= ADMIN =================
 
         ("stats", stats),
@@ -188,6 +251,9 @@ def main():
         ("exportsignals", exportsignals),
         ("dbquery", dbquery),
         ("cleanwaits", cleanwaits),
+        ("trading_stats", admin_cmd_trading_stats),
+        ("trades", admin_cmd_trades),
+        ("forceclose", admin_cmd_forceclose),
     ]
 
     # =====================================================
@@ -244,6 +310,13 @@ def main():
         CallbackQueryHandler(
             plan_callback,
             pattern="^plan_"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            trading_callback_router,
+            pattern="^(menu_autotrade|toggle_autotrade|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
         )
     )
 

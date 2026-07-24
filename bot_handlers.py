@@ -176,6 +176,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
         [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
         [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
+        [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
         [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -274,6 +275,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
             [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
             [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
+            [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
             [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
         ]
         await safe_edit(get_text(lang, "menu_title"), keyboard)

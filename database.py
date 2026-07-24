@@ -46,6 +46,9 @@ class PostgresConnection:
             self.rollback()
             raise
 
+    def cursor(self):
+        return self._conn.cursor()
+
     def commit(self):
         self._conn.commit()
 
@@ -54,6 +57,16 @@ class PostgresConnection:
 
     def close(self):
         self._conn.close()
+
+
+def get_connection():
+    """Return a new psycopg2 connection for individual queries/transactions that manage their own lifecycle."""
+    database_url = _load_database_url()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required for PostgreSQL access")
+    conn = psycopg2.connect(database_url)
+    conn.autocommit = False
+    return conn
 
 
 def get_db():
@@ -218,6 +231,66 @@ def _ensure_schema(conn):
         "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS slippage DOUBLE PRECISION DEFAULT 0",
         "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS capital_before DOUBLE PRECISION",
         "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS capital_after DOUBLE PRECISION",
+        """
+        CREATE TABLE IF NOT EXISTS trading_config (
+            user_id BIGINT PRIMARY KEY,
+            auto_trade BOOLEAN DEFAULT FALSE,
+            leverage INT DEFAULT 1,
+            risk_per_trade DOUBLE PRECISION DEFAULT 1.0,
+            max_positions INT DEFAULT 3,
+            min_score INT DEFAULT 70,
+            max_daily_loss DOUBLE PRECISION DEFAULT 5.0,
+            trailing_stop BOOLEAN DEFAULT FALSE,
+            trailing_stop_pct DOUBLE PRECISION DEFAULT 1.0,
+            dca_enabled BOOLEAN DEFAULT FALSE,
+            dca_steps INT DEFAULT 3,
+            dca_step_pct DOUBLE PRECISION DEFAULT 2.0,
+            symbol_whitelist TEXT DEFAULT '',
+            symbol_blacklist TEXT DEFAULT '',
+            market_type TEXT DEFAULT 'futures',
+            testnet BOOLEAN DEFAULT TRUE,
+            cooldown_seconds INT DEFAULT 0,
+            daily_loss_accum DOUBLE PRECISION DEFAULT 0.0,
+            daily_loss_reset_at DOUBLE PRECISION,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS binance_credentials (
+            user_id BIGINT PRIMARY KEY,
+            api_key TEXT NOT NULL,
+            api_secret TEXT NOT NULL,
+            testnet BOOLEAN DEFAULT TRUE,
+            is_valid BOOLEAN DEFAULT TRUE,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trades (
+            id SERIAL PRIMARY KEY,
+            signal_id TEXT,
+            user_id BIGINT,
+            symbol TEXT,
+            direction TEXT,
+            entry_price DOUBLE PRECISION,
+            sl_price DOUBLE PRECISION,
+            tp_price DOUBLE PRECISION,
+            quantity DOUBLE PRECISION,
+            leverage INT,
+            market_type TEXT,
+            status TEXT DEFAULT 'open',
+            opened_at DOUBLE PRECISION,
+            closed_at DOUBLE PRECISION,
+            exit_reason TEXT,
+            pnl_usdt DOUBLE PRECISION,
+            pnl_pct DOUBLE PRECISION,
+            binance_order_id TEXT,
+            binance_client_order_id TEXT,
+            sl_order_id TEXT,
+            tp_order_id TEXT,
+            error_message TEXT
+        )
+        """,
     ]
     for statement in statements:
         conn.execute(statement)

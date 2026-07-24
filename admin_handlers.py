@@ -351,6 +351,55 @@ async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /deleteuser <user_id>")
         return
+    output.seek(0)
+    await update.message.reply_document(
+        document=output.getvalue().encode('utf-8'),
+        filename='signals_export.csv',
+        caption=f'{len(signals)} signaux exportes'
+    )
+
+async def refreshhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
+    await update.message.reply_text(get_text(lang, "refreshhistory_start"))
+    from bot_handlers import check_signal_outcomes
+    await check_signal_outcomes(context.bot)
+    await update.message.reply_text(get_text(lang, "refreshhistory_done"))
+
+# =========================================================
+# CLEAR HISTORY
+# =========================================================
+
+@check_limit
+async def clearhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
+    history_mgr.clear_all_signals()
+    await update.message.reply_text(get_text(lang, "clearhistory_done"))
+
+# =========================================================
+# QUOTA
+# =========================================================
+
+@check_limit
+# DELETE USER
+# =========================================================
+
+@check_limit
+
+# =========================================================
+# QUOTA
+# =========================================================
+
+@check_limit
+async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /deleteuser <user_id>")
+        return
     try:
         uid = int(context.args[0])
     except ValueError:
@@ -360,3 +409,29 @@ async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑️ Utilisateur {uid} supprimé avec toutes ses données")
     else:
         await update.message.reply_text(f"❌ Utilisateur {uid} introuvable")
+
+
+# =========================================================
+# AUTOTRADE ADMIN COMMANDS
+# =========================================================
+
+from trading_handlers import (
+    admin_cmd_trading_stats as _base_trading_stats,
+    admin_cmd_trades as _base_trades,
+    admin_cmd_forceclose as _base_forceclose,
+)
+
+async def admin_cmd_trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await _base_trading_stats(update, context)
+
+async def admin_cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await _base_trades(update, context)
+
+async def admin_cmd_forceclose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await _base_forceclose(update, context)
