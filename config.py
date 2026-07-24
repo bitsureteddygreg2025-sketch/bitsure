@@ -92,7 +92,7 @@ TWELVEDATA_WS_URL = "wss://ws.twelvedata.com/v1/quotes/price"
 # =========================================================
 
 # Capital virtuel initial (en USDT)
-PAPER_DEFAULT_CAPITAL  = 10_000.0
+PAPER_DEFAULT_CAPITAL  = 10_000_000_000.0
 
 # Frais de trading simulés (en %) appliqués à l'entrée ET à la sortie
 # Exemple : 0.10 = 0.10% par trade (maker/taker crypto standard)
