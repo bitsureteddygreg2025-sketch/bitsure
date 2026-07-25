@@ -178,40 +178,12 @@ def main():
         from telegram import BotCommand
         commands = [
             BotCommand("menu", "Menu principal interactif"),
-            BotCommand("help", "Liste de toutes les commandes"),
-            BotCommand("analyse", "Analyse technique complète"),
-            BotCommand("price", "Prix en temps réel"),
-            BotCommand("trend", "Analyse de tendance"),
-            BotCommand("volatility", "Volatilité (ATR)"),
-            BotCommand("levels", "Supports, résistances & Fib"),
-            BotCommand("alert", "Créer une alerte de prix"),
-            BotCommand("alerts", "Afficher vos alertes"),
-            BotCommand("delalert", "Supprimer une alerte"),
-            BotCommand("clearalerts", "Effacer toutes les alertes"),
-            BotCommand("watchlist", "Afficher votre liste de suivi"),
-            BotCommand("addwatch", "Ajouter un symbole à la liste"),
-            BotCommand("removewatch", "Retirer un symbole de la liste"),
-            BotCommand("scan", "Scanner votre liste de suivi"),
-            BotCommand("paper", "Module de paper trading"),
-            BotCommand("autotrade", "Activer/désactiver l'AutoTrade"),
-            BotCommand("account", "Tableau de bord Binance"),
-            BotCommand("positions", "Positions ouvertes Binance"),
-            BotCommand("close", "Fermer une position Binance"),
-            BotCommand("pnl", "Statistiques PnL"),
-            BotCommand("history_trades", "Historique trades Binance"),
-            BotCommand("config", "Configuration AutoTrade"),
-            BotCommand("setapikeys", "Configurer vos clés API Binance"),
-            BotCommand("setleverage", "Définir le levier"),
-            BotCommand("setrisk", "Définir le risque par trade"),
-            BotCommand("whitelist", "Ajouter un symbole à la whitelist"),
-            BotCommand("blacklist", "Exclure un symbole"),
-            BotCommand("emergency_stop", "Fermer toutes les positions"),
-            BotCommand("settings", "Afficher vos paramètres"),
-            BotCommand("settimeframe", "Définir l'unité de temps"),
-            BotCommand("setstyle", "Définir le style de trading"),
-            BotCommand("setlanguage", "Changer la langue (fr/en)"),
-            BotCommand("historique", "Historique récent des signaux"),
-            BotCommand("usage", "Requêtes restantes"),
+            BotCommand("help", "Aide et catégories de commandes"),
+            BotCommand("analyse", "Menu analyse et signaux"),
+            BotCommand("paper", "Menu paper trading"),
+            BotCommand("autotrade", "Menu AutoTrade Binance"),
+            BotCommand("account", "Menu compte Binance"),
+            BotCommand("settings", "Menu paramètres"),
             BotCommand("upgrade", "Offre PRO"),
             BotCommand("support", "Support & contact"),
             BotCommand("myid", "Mon ID Telegram"),
@@ -389,7 +361,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             trading_callback_router,
-            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
+            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
         )
     )
 
