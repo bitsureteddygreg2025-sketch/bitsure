@@ -1,0 +1,19 @@
+{
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "timeframes": ["1h"],
+  "data_dir": "data/binance_futures",
+  "results_dir": "backtest/results",
+  "output_subdir": "daytrading",
+  "style": "day",
+  "initial_capital": 10000.0,
+  "risk_per_trade_pct": 1.0,
+  "leverage": 2.0,
+  "max_positions": 3,
+  "fees_pct": 0.04,
+  "slippage_pct": 0.02,
+  "trailing_stop": false,
+  "trailing_stop_pct": 1.0,
+  "min_history_bars": 60,
+  "same_bar_exit_policy": "conservative",
+  "debug_compare": true
+}

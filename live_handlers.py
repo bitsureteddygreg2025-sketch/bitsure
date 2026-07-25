@@ -5,6 +5,7 @@ Handlers Telegram du module Live Trading manuel.
 """
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -24,10 +25,110 @@ from utils import normalize_symbol
 
 logger = get_trading_logger("live_handlers")
 
+
+ORDER_TYPE_VALUES = {"market", "limit"}
+AMOUNT_MODE_VALUES = {"fixed", "percentage"}
+MARGIN_TYPE_VALUES = {"cross", "isolated"}
+REDUCE_ONLY_VALUES = {"reduce_only", "reduceonly", "true", "yes"}
+
+
+def _parse_float(value: str, field_name: str) -> float:
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} invalide : `{value}`. Valeur attendue : un nombre.") from exc
+
+
+def _parse_live_order_args(args: list[str]) -> dict:
+    if len(args) < 4:
+        raise ValueError("Paramètres insuffisants.")
+
+    parsed = {
+        "symbol": normalize_symbol(args[0].upper()),
+        "amount": _parse_float(args[1], "Montant"),
+        "sl_price": _parse_float(args[2], "Stop loss"),
+        "tp_price": _parse_float(args[3], "Take profit"),
+        "leverage": None,
+        "order_type": "MARKET",
+        "entry_price": None,
+        "amount_mode": "fixed",
+        "margin_type": "ISOLATED",
+        "reduce_only": False,
+    }
+
+    option_tokens = args[4:]
+    numeric_tokens: list[tuple[int, str, float]] = []
+    order_type_index: int | None = None
+
+    for index, raw_token in enumerate(option_tokens):
+        token = raw_token.lower()
+        if token in ORDER_TYPE_VALUES:
+            if order_type_index is not None:
+                raise ValueError(f"Type d'ordre en double : `{raw_token}`. Valeurs acceptées : market, limit.")
+            parsed["order_type"] = token.upper()
+            order_type_index = index
+            continue
+        if token in AMOUNT_MODE_VALUES:
+            parsed["amount_mode"] = token
+            continue
+        if token in MARGIN_TYPE_VALUES:
+            parsed["margin_type"] = token.upper()
+            continue
+        if token in REDUCE_ONLY_VALUES:
+            parsed["reduce_only"] = True
+            continue
+        try:
+            numeric_tokens.append((index, raw_token, float(raw_token)))
+            continue
+        except ValueError as exc:
+            accepted = "market, limit, fixed, percentage, cross, isolated, reduce_only, ou un nombre (levier/prix limite)"
+            raise ValueError(f"Paramètre optionnel invalide : `{raw_token}`. Valeurs acceptées : {accepted}.") from exc
+
+    used_numeric_indexes: set[int] = set()
+    if parsed["order_type"] == "LIMIT":
+        numeric_after_limit = [item for item in numeric_tokens if order_type_index is not None and item[0] > order_type_index]
+        if numeric_after_limit:
+            idx, _raw, value = numeric_after_limit[0]
+            parsed["entry_price"] = value
+            used_numeric_indexes.add(idx)
+        else:
+            price_like = [item for item in numeric_tokens if not float(item[2]).is_integer() or item[2] > 125]
+            if price_like:
+                idx, _raw, value = price_like[0]
+                parsed["entry_price"] = value
+                used_numeric_indexes.add(idx)
+            else:
+                raise ValueError("Prix limite manquant : un ordre limit nécessite un prix limite numérique.")
+
+    for idx, raw_token, value in numeric_tokens:
+        if idx in used_numeric_indexes:
+            continue
+        if parsed["leverage"] is None and value.is_integer() and 1 <= int(value) <= 125:
+            parsed["leverage"] = int(value)
+            continue
+        if parsed["order_type"] == "LIMIT" and parsed["entry_price"] is None:
+            parsed["entry_price"] = value
+            continue
+        if parsed["order_type"] == "MARKET":
+            raise ValueError(f"Paramètre numérique invalide pour un ordre market : `{raw_token}`. Valeurs acceptées : levier entier de 1 à 125, market, fixed, percentage, cross, isolated, reduce_only.")
+        raise ValueError(f"Paramètre numérique invalide : `{raw_token}`. Valeurs acceptées : levier entier de 1 à 125 ou prix limite numérique.")
+
+    return parsed
+
 NO_LIVE_KEYS_MESSAGE = (
     "🔑 Live Trading nécessite des clés API Binance valides.\n"
     "Utilise /setapikeys <api_key> <api_secret> en privé avant d'envoyer un ordre réel."
 )
+
+
+async def _safe_edit_message_text(query, text: str, **kwargs):
+    try:
+        return await query.edit_message_text(text, **kwargs)
+    except BadRequest as exc:
+        if "Message is not modified" in str(exc):
+            logger.debug("Ignored unchanged Telegram message edit: %s", exc)
+            return None
+        raise
 
 
 def _has_live_keys(user_id: int) -> bool:
@@ -96,20 +197,12 @@ async def _prepare_live_order(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(_usage("long" if side == "BUY" else "short"), parse_mode=ParseMode.MARKDOWN)
         return
     try:
-        symbol = normalize_symbol(context.args[0].upper())
-        amount = float(context.args[1])
-        sl_price = float(context.args[2])
-        tp_price = float(context.args[3])
-        leverage = int(context.args[4]) if len(context.args) > 4 and context.args[4].isdigit() else None
-        order_type = context.args[5].upper() if len(context.args) > 5 else "MARKET"
-        entry_price = float(context.args[6]) if len(context.args) > 6 and order_type == "LIMIT" else None
-        amount_mode = context.args[7].lower() if len(context.args) > 7 else "fixed"
-        margin_type = context.args[8].upper() if len(context.args) > 8 else "ISOLATED"
-        reduce_only = len(context.args) > 9 and context.args[9].lower() in ("reduce_only", "reduceonly", "true", "yes")
+        parsed_args = _parse_live_order_args(context.args)
         draft = build_draft(
-            user_id, symbol, side, amount, leverage=leverage, sl_price=sl_price, tp_price=tp_price,
-            amount_mode=amount_mode, order_type=order_type, entry_price=entry_price,
-            margin_type=margin_type, reduce_only=reduce_only,
+            user_id, parsed_args["symbol"], side, parsed_args["amount"],
+            leverage=parsed_args["leverage"], sl_price=parsed_args["sl_price"], tp_price=parsed_args["tp_price"],
+            amount_mode=parsed_args["amount_mode"], order_type=parsed_args["order_type"], entry_price=parsed_args["entry_price"],
+            margin_type=parsed_args["margin_type"], reduce_only=parsed_args["reduce_only"],
         )
         checks = validate_draft(user_id, draft)
     except (ValueError, BinanceClientError) as e:
@@ -145,29 +238,31 @@ async def live_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if data == "menu_live":
         if not _has_live_keys(user_id):
-            await query.edit_message_text(NO_LIVE_KEYS_MESSAGE)
+            await _safe_edit_message_text(query, NO_LIVE_KEYS_MESSAGE)
             return
         config = get_config(user_id)
-        await query.edit_message_text(
-            f"🚨 *Live Trading — Ordres réels*\nMarché : *{config.market_type.upper()}*\nChoisis une action.",
-            reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN,
+        await _safe_edit_message_text(
+            query,
+            f"🚨 Live Trading — Ordres réels\nMarché : {config.market_type.upper()}\nChoisis une action.",
+            reply_markup=_live_menu_keyboard(),
         )
     elif data in ("live_open_long", "live_open_short"):
         side = "long" if data == "live_open_long" else "short"
-        await query.edit_message_text(_usage(side), reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        await _safe_edit_message_text(query, _usage(side), reply_markup=_live_menu_keyboard())
     elif data == "live_confirm":
         draft = context.user_data.get("live_order_draft")
         if not draft:
-            await query.edit_message_text("❌ Aucun ordre Live Trading en attente de confirmation.", reply_markup=_live_menu_keyboard())
+            await _safe_edit_message_text(query, "❌ Aucun ordre Live Trading en attente de confirmation.", reply_markup=_live_menu_keyboard())
             return
         try:
             result = execute_draft(user_id, draft)
         except BinanceClientError as e:
-            await query.edit_message_text(f"❌ Ordre non envoyé : {e}", reply_markup=_live_menu_keyboard())
+            await _safe_edit_message_text(query, f"❌ Ordre non envoyé : {e}", reply_markup=_live_menu_keyboard())
             return
         context.user_data.pop("live_order_draft", None)
         order = result.get("order", {})
-        await query.edit_message_text(
+        await _safe_edit_message_text(
+            query,
             f"✅ Ordre réel envoyé.\nSymbole : {draft.symbol}\nOrder ID : {order.get('orderId', '—')}",
             reply_markup=_live_menu_keyboard(),
         )
@@ -176,9 +271,9 @@ async def live_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == "live_orders":
         await _show_open_orders(query, user_id)
     elif data == "live_close_menu":
-        await query.edit_message_text("Commande : `/live_close ID_POSITION`", reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        await _safe_edit_message_text(query, "Commande : /live_close ID_POSITION", reply_markup=_live_menu_keyboard())
     elif data == "live_cancel_menu":
-        await query.edit_message_text("Commande : `/live_cancel SYMBOL ORDER_ID`", reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        await _safe_edit_message_text(query, "Commande : /live_cancel SYMBOL ORDER_ID", reply_markup=_live_menu_keyboard())
     elif data == "live_history":
         await _show_history(query, user_id)
     elif data == "live_balance":
@@ -212,27 +307,27 @@ async def cmd_live_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _show_live_positions(query, user_id: int):
     trades = get_open_trades(user_id)
     if not trades:
-        await query.edit_message_text("📈 Aucune position Live ouverte.", reply_markup=_live_menu_keyboard())
+        await _safe_edit_message_text(query, "📈 Aucune position Live ouverte.", reply_markup=_live_menu_keyboard())
         return
-    lines = ["📈 *Positions Live ouvertes*\n"]
+    lines = ["📈 Positions Live ouvertes\n"]
     for trade in trades:
-        lines.append(f"#{trade['id']} `{trade['symbol']}` {trade['direction']} qty={trade['quantity']} SL={trade['sl_price']} TP={trade['tp_price']}")
-    await query.edit_message_text("\n".join(lines), reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        lines.append(f"#{trade['id']} {trade['symbol']} {trade['direction']} qty={trade['quantity']} SL={trade['sl_price']} TP={trade['tp_price']}")
+    await _safe_edit_message_text(query, "\n".join(lines), reply_markup=_live_menu_keyboard())
 
 
 async def _show_open_orders(query, user_id: int):
     try:
         orders = get_open_orders(user_id)
     except BinanceClientError as e:
-        await query.edit_message_text(f"❌ {e}", reply_markup=_live_menu_keyboard())
+        await _safe_edit_message_text(query, f"❌ {e}", reply_markup=_live_menu_keyboard())
         return
     if not orders:
-        await query.edit_message_text("📋 Aucun ordre ouvert.", reply_markup=_live_menu_keyboard())
+        await _safe_edit_message_text(query, "📋 Aucun ordre ouvert.", reply_markup=_live_menu_keyboard())
         return
-    lines = ["📋 *Ordres ouverts*\n"]
+    lines = ["📋 Ordres ouverts\n"]
     for order in orders[:10]:
-        lines.append(f"#{order.get('orderId')} `{order.get('symbol')}` {order.get('side')} {order.get('type')} qty={order.get('origQty')}")
-    await query.edit_message_text("\n".join(lines), reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        lines.append(f"#{order.get('orderId')} {order.get('symbol')} {order.get('side')} {order.get('type')} qty={order.get('origQty')}")
+    await _safe_edit_message_text(query, "\n".join(lines), reply_markup=_live_menu_keyboard())
 
 
 async def _show_history(query, user_id: int):
@@ -248,26 +343,27 @@ async def _show_history(query, user_id: int):
     finally:
         conn.close()
     if not rows:
-        await query.edit_message_text("🕓 Aucun historique Live.", reply_markup=_live_menu_keyboard())
+        await _safe_edit_message_text(query, "🕓 Aucun historique Live.", reply_markup=_live_menu_keyboard())
         return
-    lines = ["🕓 *Historique Live*\n"]
+    lines = ["🕓 Historique Live\n"]
     for symbol, direction, pnl, reason, _closed_at in rows:
-        lines.append(f"`{symbol}` {direction} PnL={float(pnl or 0):.2f} USDT ({reason or '—'})")
-    await query.edit_message_text("\n".join(lines), reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+        lines.append(f"{symbol} {direction} PnL={float(pnl or 0):.2f} USDT ({reason or '—'})")
+    await _safe_edit_message_text(query, "\n".join(lines), reply_markup=_live_menu_keyboard())
 
 
 async def _show_balance(query, user_id: int):
     try:
         info = get_live_account(user_id)
     except BinanceClientError as e:
-        await query.edit_message_text(f"❌ {e}", reply_markup=_live_menu_keyboard())
+        await _safe_edit_message_text(query, f"❌ {e}", reply_markup=_live_menu_keyboard())
         return
-    await query.edit_message_text(
-        f"💼 *Solde Live ({info['market_type'].upper()})*\n"
-        f"Total : `{info['total_wallet_balance']:.2f} USDT`\n"
-        f"Disponible : `{info['available_balance']:.2f} USDT`\n"
-        f"PnL non réalisé : `{info['unrealized_pnl']:+.2f} USDT`",
-        reply_markup=_live_menu_keyboard(), parse_mode=ParseMode.MARKDOWN,
+    await _safe_edit_message_text(
+        query,
+        f"💼 Solde Live ({info['market_type'].upper()})\n"
+        f"Total : {info['total_wallet_balance']:.2f} USDT\n"
+        f"Disponible : {info['available_balance']:.2f} USDT\n"
+        f"PnL non réalisé : {info['unrealized_pnl']:+.2f} USDT",
+        reply_markup=_live_menu_keyboard(),
     )
 
 
