@@ -93,13 +93,13 @@ async def teddy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your PRO subscription has been activated! Use /menu to start trading.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[teddy] Failed to notify user {uid}: {e}")
     elif user_mgr.approve_user(uid):
         await update.message.reply_text(f"✅ Utilisateur {uid} approuvé comme testeur")
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your access has been approved! Use /menu to start.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[teddy] Failed to notify user {uid}: {e}")
     else:
         await update.message.reply_text(f"❌ Utilisateur {uid} introuvable")
 
@@ -201,7 +201,7 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your PRO subscription has been activated! Use /menu to start trading.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[confirm_payment] Failed to notify user {uid}: {e}")
     else:
         await update.message.reply_text(get_text(lang, "confirm_payment_missing", user_id=uid))
 

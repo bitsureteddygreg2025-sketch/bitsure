@@ -92,8 +92,7 @@ def check_limit(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user_id = update.effective_user.id
         lang = get_user_lang(update)
-        import logging
-        logging.getLogger(__name__).warning(f"[check_limit] func={func.__name__}, user={user_id}")
+        logger.debug(f"[check_limit] func={func.__name__}, user={user_id}")
         if not user_mgr.can_access_bot(user_id):
             if update.callback_query:
                 await update.callback_query.answer("🚧 Access by invitation only. Contact @btsr_teddy09", show_alert=True)
@@ -165,6 +164,7 @@ def _build_main_menu_keyboard(lang: str) -> list:
         [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
         [InlineKeyboardButton("💼 Mon Compte (Solde & PnL)", callback_data="menu_account")],
         [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
+        [InlineKeyboardButton("🚨 Live Trading", callback_data="menu_live")],
         [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
     ]
 
@@ -676,7 +676,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_mgr.is_admin(user_id):
         help_text += get_text(lang, "help_admin")
     
-    full_msg = help_text + trial_msg
+    full_msg = (help_text + trial_msg).replace("_", r"\_")
     await update.message.reply_text(full_msg, parse_mode=ParseMode.MARKDOWN)
 
 @check_limit
@@ -1391,14 +1391,14 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if df is None or df.empty:
                 await respond(update, f"❌ Impossible de récupérer le prix pour {symbol}")
                 return
-            price = float(df["close"].iloc[-1])
+            price = float(df["Close"].iloc[-1])
         else:
             price = float(price_data["price"])
 
         # Calcul SL/TP basés sur l'ATR
         df = await fetcher.get_historical_data(symbol, timeframe="1h")
         if df is not None and not df.empty:
-            atr_val = float(atr(df["high"], df["low"], df["close"]).iloc[-1])
+            atr_val = float(atr(df["High"], df["Low"], df["Close"]).iloc[-1])
         else:
             atr_val = price * 0.02
 
