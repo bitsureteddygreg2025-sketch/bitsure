@@ -114,6 +114,7 @@ from trading_handlers import (
     cmd_whitelist,
     cmd_blacklist,
     cmd_emergency_stop,
+    cmd_editsignal,
     trading_callback_router,
 )
 from execution_engine import scheduled_market_analysis, scheduled_signal_scan
@@ -281,6 +282,7 @@ def main():
         ("whitelist", cmd_whitelist),
         ("blacklist", cmd_blacklist),
         ("emergency_stop", cmd_emergency_stop),
+        ("editsignal", cmd_editsignal),
 
         # ================= ADMIN =================
 
@@ -340,7 +342,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             menu_callback,
-            pattern="^(menu_(?!autotrade|positions|trading_config)|cmd_|paperdir_|check_subscription|clearhistory_|clearalerts_)"
+            pattern="^(menu_(?!autotrade|positions|trading_config|leverage|risk|maxpos|minscore|trailing|whitelist|blacklist|pnl|history_trades)|cmd_|paperdir_|clearalerts_)"
         )
     )
 
@@ -361,7 +363,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             trading_callback_router,
-            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_)"
+            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_|menu_leverage|set_leverage_|menu_risk|set_risk_|menu_maxpos|set_maxpos_|menu_minscore|set_minscore_|menu_trailing|toggle_trailing|set_trailing_|menu_whitelist|menu_blacklist|menu_pnl|menu_history_trades)"
         )
     )
 

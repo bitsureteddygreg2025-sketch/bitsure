@@ -65,16 +65,15 @@ async def cmd_setapikeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche le menu AutoTrade (cohérent avec sa description dans /help et le menu natif Telegram).
+    Le basculement ON/OFF se fait via le bouton dédié dans ce menu, plutôt qu'en aveugle à chaque appel."""
     user_id = update.effective_user.id
     if not _is_user_allowed(user_id):
         await update.message.reply_text(NO_KEYS_MESSAGE)
         return
 
-    config = get_config(user_id)
-    new_value = not config.auto_trade
-    update_config(user_id, auto_trade=new_value)
-    status = "activé ✅" if new_value else "désactivé ❌"
-    await update.message.reply_text(f"Mode automatique {status}.")
+    text, keyboard = _build_autotrade_menu(user_id)
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,6 +331,29 @@ def build_autotrade_menu_buttons() -> list:
     ]
 
 
+def _build_autotrade_menu(user_id: int):
+    """Construit (texte, clavier) du menu AutoTrade. Réutilisé par /autotrade et le callback menu_autotrade."""
+    config = get_config(user_id)
+    status = "ON ✅" if config.auto_trade else "OFF ❌"
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Basculer (actuellement {status})", callback_data="toggle_autotrade")],
+        [InlineKeyboardButton("Mode spot/futures", callback_data="menu_market_mode")],
+        [InlineKeyboardButton("Analyse periodique", callback_data="menu_analysis_config")],
+        [InlineKeyboardButton("⚙️ Configuration", callback_data="menu_trading_config")],
+        [InlineKeyboardButton("📈 Positions", callback_data="menu_positions")],
+        [InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")],
+    ])
+    text = (
+        f"🤖 *AutoTrade Binance*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Mode automatique : *{status}*\n"
+        f"Marché : *{config.market_type.upper()}*\n"
+        f"Analyse : *{config.analysis_timeframe} / {config.analysis_interval_minutes} min*\n"
+        f"Style : *{config.trading_style}*"
+    )
+    return text, keyboard
+
+
 async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -339,25 +361,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
 
     if data == "menu_autotrade":
-        config = get_config(user_id)
-        status = "ON ✅" if config.auto_trade else "OFF ❌"
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"Basculer (actuellement {status})", callback_data="toggle_autotrade")],
-            [InlineKeyboardButton("Mode spot/futures", callback_data="menu_market_mode")],
-            [InlineKeyboardButton("Analyse periodique", callback_data="menu_analysis_config")],
-            [InlineKeyboardButton("Configuration", callback_data="menu_trading_config")],
-            [InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")],
-        ])
-        await query.edit_message_text(
-            f"🤖 *AutoTrade Binance*\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"Mode automatique : *{status}*\n"
-            f"Marché : *{config.market_type.upper()}*\n"
-            f"Analyse : *{config.analysis_timeframe} / {config.analysis_interval_minutes} min*\n"
-            f"Style : *{config.trading_style}*",
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
+        text, keyboard = _build_autotrade_menu(user_id)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif data == "toggle_autotrade":
         config = get_config(user_id)
@@ -489,7 +494,25 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data == "menu_trading_config":
         config = get_config(user_id)
+        trailing_str = f"{'ON' if config.trailing_stop else 'OFF'} ({config.trailing_stop_pct}%)"
         keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"⚡ Levier (x{config.leverage})", callback_data="menu_leverage"),
+                InlineKeyboardButton(f"📊 Risque ({config.risk_per_trade}%)", callback_data="menu_risk"),
+            ],
+            [
+                InlineKeyboardButton(f"🎯 Max positions ({config.max_positions})", callback_data="menu_maxpos"),
+                InlineKeyboardButton(f"🧠 Score min ({config.min_score})", callback_data="menu_minscore"),
+            ],
+            [InlineKeyboardButton(f"📉 Trailing stop ({trailing_str})", callback_data="menu_trailing")],
+            [
+                InlineKeyboardButton("✅ Whitelist", callback_data="menu_whitelist"),
+                InlineKeyboardButton("🚫 Blacklist", callback_data="menu_blacklist"),
+            ],
+            [
+                InlineKeyboardButton("💰 PnL", callback_data="menu_pnl"),
+                InlineKeyboardButton("🕓 Historique", callback_data="menu_history_trades"),
+            ],
             [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
         ])
         await query.edit_message_text(
@@ -500,11 +523,222 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Marché : {config.market_type}\n"
             f"Analyse : {config.analysis_timeframe}/{config.analysis_interval_minutes}m\n"
             f"Style : {config.trading_style}\n"
-            f"Max positions : {config.max_positions}\n\n"
-            f"_Utilise /config pour le détail complet._",
+            f"Max positions : {config.max_positions}\n"
+            f"Score minimum : {config.min_score}\n"
+            f"Trailing stop : {trailing_str}\n\n"
+            f"Utilise les boutons ci-dessous pour ajuster, ou /config pour le détail complet.",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
+
+    elif data == "menu_leverage":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("x1", callback_data="set_leverage_1"),
+                InlineKeyboardButton("x2", callback_data="set_leverage_2"),
+                InlineKeyboardButton("x5", callback_data="set_leverage_5"),
+            ],
+            [
+                InlineKeyboardButton("x10", callback_data="set_leverage_10"),
+                InlineKeyboardButton("x20", callback_data="set_leverage_20"),
+                InlineKeyboardButton("x50", callback_data="set_leverage_50"),
+            ],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"⚡ *Levier actuel : x{config.leverage}*\n\nChoisis une nouvelle valeur (ou /setleverage <n> pour une valeur précise, jusqu'à x125).",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("set_leverage_"):
+        leverage = int(data.replace("set_leverage_", ""))
+        update_config(user_id, leverage=leverage)
+        query.data = "menu_leverage"
+        await trading_callback_router(update, context)
+
+    elif data == "menu_risk":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("1%", callback_data="set_risk_1"),
+                InlineKeyboardButton("2%", callback_data="set_risk_2"),
+                InlineKeyboardButton("5%", callback_data="set_risk_5"),
+                InlineKeyboardButton("10%", callback_data="set_risk_10"),
+            ],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"📊 *Risque par trade actuel : {config.risk_per_trade}%*\n\nChoisis une nouvelle valeur (ou /setrisk <pourcentage> pour une valeur précise, jusqu'à 20%).",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("set_risk_"):
+        risk = float(data.replace("set_risk_", ""))
+        update_config(user_id, risk_per_trade=risk)
+        query.data = "menu_risk"
+        await trading_callback_router(update, context)
+
+    elif data == "menu_maxpos":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("1", callback_data="set_maxpos_1"),
+                InlineKeyboardButton("3", callback_data="set_maxpos_3"),
+                InlineKeyboardButton("5", callback_data="set_maxpos_5"),
+                InlineKeyboardButton("10", callback_data="set_maxpos_10"),
+            ],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"🎯 *Max positions simultanées actuel : {config.max_positions}*\n\nChoisis une nouvelle valeur.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("set_maxpos_"):
+        maxpos = int(data.replace("set_maxpos_", ""))
+        update_config(user_id, max_positions=maxpos)
+        query.data = "menu_maxpos"
+        await trading_callback_router(update, context)
+
+    elif data == "menu_minscore":
+        config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("50", callback_data="set_minscore_50"),
+                InlineKeyboardButton("60", callback_data="set_minscore_60"),
+                InlineKeyboardButton("70", callback_data="set_minscore_70"),
+                InlineKeyboardButton("80", callback_data="set_minscore_80"),
+            ],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"🧠 *Score minimum actuel pour exécuter un signal : {config.min_score}*\n\nChoisis une nouvelle valeur.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("set_minscore_"):
+        minscore = int(data.replace("set_minscore_", ""))
+        update_config(user_id, min_score=minscore)
+        query.data = "menu_minscore"
+        await trading_callback_router(update, context)
+
+    elif data == "menu_trailing":
+        config = get_config(user_id)
+        t_status = "ACTIVÉ ✅" if config.trailing_stop else "DÉSACTIVÉ ❌"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Trailing stop ({t_status})", callback_data="toggle_trailing")],
+            [
+                InlineKeyboardButton("1%", callback_data="set_trailing_1"),
+                InlineKeyboardButton("2%", callback_data="set_trailing_2"),
+                InlineKeyboardButton("3%", callback_data="set_trailing_3"),
+                InlineKeyboardButton("5%", callback_data="set_trailing_5"),
+            ],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"📉 *Trailing Stop*\n\nÉtat : *{t_status}*\nDistance actuelle : *{config.trailing_stop_pct}%*",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data == "toggle_trailing":
+        config = get_config(user_id)
+        update_config(user_id, trailing_stop=not config.trailing_stop)
+        query.data = "menu_trailing"
+        await trading_callback_router(update, context)
+
+    elif data.startswith("set_trailing_"):
+        pct = float(data.replace("set_trailing_", ""))
+        update_config(user_id, trailing_stop_pct=pct)
+        query.data = "menu_trailing"
+        await trading_callback_router(update, context)
+
+    elif data == "menu_whitelist":
+        config = get_config(user_id)
+        wl = ", ".join(config.symbol_whitelist) or "— (aucune restriction)"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"✅ *Whitelist AutoTrade*\n\n{wl}\n\n"
+            f"Utilise /whitelist <SYMBOLE> pour ajouter un symbole.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_blacklist":
+        config = get_config(user_id)
+        bl = ", ".join(config.symbol_blacklist) or "— (aucune)"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"🚫 *Blacklist AutoTrade*\n\n{bl}\n\n"
+            f"Utilise /blacklist <SYMBOLE> pour ajouter un symbole.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_pnl":
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*), COALESCE(SUM(pnl_usdt), 0),
+                           COALESCE(SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END), 0)
+                    FROM trades WHERE user_id = %s AND status = 'closed'
+                    """,
+                    (user_id,),
+                )
+                total, pnl_sum, wins = cur.fetchone()
+        finally:
+            conn.close()
+        winrate = (wins / total * 100) if total else 0
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_pnl")],
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        await query.edit_message_text(
+            f"📊 *Statistiques de trading*\n\n"
+            f"Trades clôturés : {total}\n"
+            f"PnL cumulé : {pnl_sum:.2f} USDT\n"
+            f"Win rate : {winrate:.1f}%",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_history_trades":
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT symbol, direction, pnl_usdt, exit_reason, closed_at
+                    FROM trades WHERE user_id = %s AND status = 'closed'
+                    ORDER BY closed_at DESC LIMIT 10
+                    """,
+                    (user_id,),
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
+        ])
+        if not rows:
+            await query.edit_message_text("Aucun trade dans l'historique.", reply_markup=keyboard)
+            return
+        lines = ["🕓 *10 derniers trades*\n"]
+        for symbol, direction, pnl, reason, closed_at in rows:
+            emoji = "🟢" if (pnl or 0) >= 0 else "🔴"
+            lines.append(f"{emoji} `{symbol}` {direction} — {pnl:.2f} USDT ({reason})")
+        await query.edit_message_text("\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
 
     elif data.startswith("trading_open_"):
         signal_id = data.replace("trading_open_", "")
@@ -521,6 +755,68 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Pour modifier SL/TP du signal {signal_id}, réponds avec :\n"
             f"/editsignal {signal_id} <nouveau_sl> <nouveau_tp>"
         )
+
+
+async def cmd_editsignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage : /editsignal <id_signal> <nouveau_sl> <nouveau_tp>
+
+    Permet de modifier le SL/TP d'un signal en attente de confirmation
+    (déclenché par le bouton "✏️ Modifier SL/TP" en mode semi-automatique)
+    avant de l'ouvrir avec trading_open_<id> ou de le refuser.
+    """
+    user_id = update.effective_user.id
+
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "Usage : /editsignal <id_signal> <nouveau_sl> <nouveau_tp>\n"
+            "Exemple : /editsignal 42 1.0850 1.0920"
+        )
+        return
+
+    signal_id = context.args[0]
+    try:
+        new_sl = float(context.args[1])
+        new_tp = float(context.args[2])
+    except ValueError:
+        await update.message.reply_text("❌ SL et TP doivent être des nombres (ex: /editsignal 42 1.0850 1.0920).")
+        return
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, user_id, symbol, direction FROM signals WHERE id = %s",
+                (signal_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                await update.message.reply_text("Signal introuvable (peut-être déjà expiré).")
+                return
+
+            sig_id, sig_user_id, symbol, direction = row
+            if int(sig_user_id) != int(user_id):
+                await update.message.reply_text("❌ Ce signal ne t'appartient pas.")
+                return
+
+            cur.execute(
+                "UPDATE signals SET sl = %s, tp = %s WHERE id = %s",
+                (new_sl, new_tp, signal_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Ouvrir", callback_data=f"trading_open_{signal_id}"),
+         InlineKeyboardButton("❌ Refuser", callback_data=f"trading_reject_{signal_id}")]
+    ])
+    await update.message.reply_text(
+        f"✏️ Signal #{signal_id} mis à jour : {symbol} {direction}\n"
+        f"Nouveau SL : {new_sl}\n"
+        f"Nouveau TP : {new_tp}",
+        reply_markup=keyboard,
+    )
 
 
 async def _confirm_open_signal(query, context: ContextTypes.DEFAULT_TYPE, signal_id: str):

@@ -575,3 +575,13 @@ class PaperTrader:
             "losses":         total_cl - wins,
             "win_rate":       round(wins / total_cl * 100, 2) if total_cl > 0 else 0.0,
         }
+
+
+# =========================================================
+# SINGLETON PARTAGÉ
+# =========================================================
+# Instance unique importée par bot_handlers.py et position_manager.py.
+# Important : ne pas instancier PaperTrader() ailleurs dans le code, sinon
+# chaque instance aurait son propre cache mémoire (self.positions, etc.)
+# désynchronisé des autres, même si toutes lisent/écrivent la même base.
+paper_trader = PaperTrader()

@@ -23,7 +23,7 @@ from history_manager import HistoryManager
 from utils import format_number, is_valid_symbol, normalize_symbol
 from i18n import get_text
 from payments import generate_binance_payment
-from paper_trader import PaperTrader
+from paper_trader import paper_trader
 
 logger = logging.getLogger(__name__)
 fetcher = DataFetcher.get_instance()
@@ -31,7 +31,6 @@ user_mgr = UserManager.get_instance()
 alert_mgr = AlertManager.get_instance()
 history_mgr = HistoryManager.get_instance()
 weekly_scheduler = None
-paper_trader = PaperTrader()
 
 SYMBOLS_12 = [
     "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY",
@@ -157,9 +156,9 @@ async def notify_admin_new_premium(context: ContextTypes.DEFAULT_TYPE, user, rol
 # MENU PRINCIPAL
 # =========================================================
 
-async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_user_lang(update)
-    keyboard = [
+def _build_main_menu_keyboard(lang: str) -> list:
+    """Clavier du menu principal, partagé entre menu_command() et le callback menu_back."""
+    return [
         [InlineKeyboardButton(get_text(lang, "menu_analyse"), callback_data="menu_analyse")],
         [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
         [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
@@ -168,7 +167,11 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
         [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(update)
+    reply_markup = InlineKeyboardMarkup(_build_main_menu_keyboard(lang))
     await update.message.reply_text(get_text(lang, "menu_title"), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 @check_limit
@@ -274,15 +277,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_settings_menu(lang, tf, style, uid, query.message.reply_text, edit_fn=safe_edit)
 
     elif data == "menu_back":
-        keyboard = [
-            [InlineKeyboardButton(get_text(lang, "menu_analyse"), callback_data="menu_analyse")],
-            [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
-            [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
-            [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
-            [InlineKeyboardButton("💼 Mon Compte (Solde & PnL)", callback_data="menu_account")],
-            [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
-            [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
-        ]
+        keyboard = _build_main_menu_keyboard(lang)
         await safe_edit(get_text(lang, "menu_title"), keyboard, parse_mode=ParseMode.MARKDOWN)
 
     elif data.startswith("cmd_"):
@@ -587,7 +582,7 @@ async def symbol_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif command == "paper":
                 kb = [
                     [InlineKeyboardButton("BUY 🟢", callback_data=f"paperdir_{symbol}_BUY"),
-                     InlineKeyboardButton("SELL 🔴", callback_data=f"paperdir_{symbol}_SELL")]
+                     InlineKeyboardButton("SHORT 🔴", callback_data=f"paperdir_{symbol}_SHORT")]
                 ]
                 await query.message.reply_text(get_text(lang, "paper_choose_direction", symbol=symbol), reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -1041,8 +1036,6 @@ async def levels(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callba
 # =========================================================
 # PARAMÈTRES
 # =========================================================
-
-@check_limit
 
 async def send_settings_menu(lang: str, tf: str, style: str, uid: int,
                              send_fn, edit_fn=None):

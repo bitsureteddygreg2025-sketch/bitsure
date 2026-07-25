@@ -1,0 +1,739 @@
+1. RÉSUMÉ DE L'ARCHITECTURE
+Le projet est un bot Telegram de trading nommé Bitsure Teddy. Le point d’entrée est main.py, qui initialise la base PostgreSQL, importe les handlers utilisateur/admin/trading, démarre plusieurs tâches périodiques, enregistre les commandes Telegram, puis lance le bot en webhook ou polling selon WEBHOOK_URL. 
+
+État du repository pendant l’audit : aucune modification non commitée détectée.
+
+Commandes d’audit utilisées :
+
+✅ git status --short && git log --oneline -5 && rg --files -g '!__pycache__' -g '!*.pyc' | sort
+
+✅ python -m py_compile main.py bot_handlers.py trading_handlers.py execution_engine.py signal_engine.py history_manager.py admin_handlers.py database.py trading_config.py position_manager.py risk_manager.py binance_manager.py paper_trader.py user_manager.py alert_manager.py data_fetcher.py indicators.py payments.py utils.py market_hours.py trading_logger.py
+
+✅ python - <<'PY' ... ast/re/find callbacks and commands ... PY
+
+✅ git show --stat --oneline HEAD && git show HEAD^:main.py ... && git show HEAD^:history_manager.py ...
+
+Modules principaux
+Zone	Fichiers	Rôle actuel
+Démarrage bot	main.py	Initialise DB, services, commandes, callbacks, schedulers, polling/webhook. 
+Handlers utilisateur	bot_handlers.py	/start, /help, /menu, analyse, prix, alertes, watchlist, paramètres, historique, paper trading, paiements, schedulers signaux/rapports. 
+Handlers AutoTrade	trading_handlers.py	Config Binance, mode spot/futures, analyse périodique, positions, confirmation/rejet signaux. 
+Exécution trading	execution_engine.py	Lit les signaux pending/active, filtre risque/config, ouvre position ou demande confirmation, analyse périodique Binance. 
+Binance	binance_manager.py	Client Binance spot/futures, symboles tradables, klines, prix, ordres. 
+Risque	risk_manager.py	Limites positions, whitelist/blacklist, cooldown, pertes journalières, sizing. 
+Positions réelles	position_manager.py	Lit/ferme les trades, surveille SL/TP/trailing stop, emergency stop. 
+Signaux	signal_engine.py	Analyse technique, styles, scoring, WAIT/BUY/SELL, SL/TP, RR. 
+Historique signaux	history_manager.py	Insertion et lecture des signaux PostgreSQL, exclusion des WAIT à l’insertion et lecture. 
+Base PostgreSQL	database.py	Crée users, usage, settings, watchlist, alerts, signals, paper_positions, paper_capitals, trading_config, binance_credentials, trades. 
+Utilisateurs	user_manager.py	Accès, rôles, limites, watchlist, settings, paiements Binance, approbation admin. 
+Alertes	alert_manager.py	CRUD alertes et monitoring prix toutes les 60s. 
+Paper trading	paper_trader.py	Simulateur long/short, levier, frais, slippage, capital, SL/TP, historique. 
+Admin	admin_handlers.py	Stats, approbation, broadcast, switch API, DB query, export, clean WAIT, clear history. 
+Flux global
+main.py importe config.py, qui exige TELEGRAM_TOKEN et ADMIN_ID au chargement. Sans ces variables, le processus échoue avant lancement. 
+
+get_db() est appelé au démarrage et crée/altère le schéma PostgreSQL. 
+
+Les commandes sont enregistrées dans handlers, puis passées à CommandHandler. Toutes les commandes restent techniquement enregistrées, même si elles ne sont plus toutes visibles dans le menu Telegram natif. 
+
+Les callbacks inline sont routés par 5 CallbackQueryHandler : menu général, sélection symbole, paiement plan, trading, conditions d’utilisation. 
+
+Les schedulers démarrés : rapport hebdomadaire, surveillance signaux/paper, alertes, AutoTrade périodique et monitoring positions. 
+
+2. ARBRE COMPLET DU MENU INTERACTIF
+MENU PRINCIPAL
+Défini par menu_command() dans bot_handlers.py. 
+
+MENU PRINCIPAL
+├── 📊 Analyse
+│   ├── Callback réellement appelé : menu_analyse
+│   ├── Handler : menu_callback
+│   ├── Fonction appelée : branche data == "menu_analyse"
+│   ├── Fonctionnalité disponible : ouvre le sous-menu Analyse
+│   └── État : FONCTIONNE
+│
+├── 🚨 Alertes
+│   ├── Callback réellement appelé : menu_alertes
+│   ├── Handler : menu_callback
+│   ├── Fonction appelée : branche data == "menu_alertes"
+│   ├── Fonctionnalité disponible : ouvre le sous-menu Alertes
+│   └── État : FONCTIONNE
+│
+├── 📋 Watchlist
+│   ├── Callback réellement appelé : menu_watchlist
+│   ├── Handler : menu_callback
+│   ├── Fonction appelée : branche data == "menu_watchlist"
+│   ├── Fonctionnalité disponible : ouvre le sous-menu Watchlist
+│   └── État : FONCTIONNE
+│
+├── 📈 Paper Trading
+│   ├── Callback réellement appelé : menu_paper
+│   ├── Handler : menu_callback
+│   ├── Fonction appelée : branche data == "menu_paper"
+│   ├── Fonctionnalité disponible : ouvre le sous-menu Paper
+│   └── État : FONCTIONNE PARTIELLEMENT
+│
+├── 💼 Mon Compte (Solde & PnL)
+│   ├── Callback réellement appelé : menu_account
+│   ├── Handler : menu_callback
+│   ├── Fonction appelée : cmd_account
+│   ├── Fonctionnalité disponible : dashboard Binance spot/futures
+│   └── État : FONCTIONNE SI clés Binance valides
+│
+├── 🤖 AutoTrade Binance
+│   ├── Callback réellement appelé : menu_autotrade
+│   ├── Handler : trading_callback_router
+│   ├── Fonction appelée : branche data == "menu_autotrade"
+│   ├── Fonctionnalité disponible : ouvre le sous-menu AutoTrade
+│   └── État : FONCTIONNE
+│
+└── ⚙️ Paramètres
+    ├── Callback réellement appelé : menu_parametres
+    ├── Handler : menu_callback
+    ├── Fonction appelée : send_settings_menu
+    ├── Fonctionnalité disponible : timeframe, langue, style, historique, support
+    └── État : FONCTIONNE PARTIELLEMENT
+Le handler général capture menu_ sauf menu_autotrade, menu_positions, menu_trading_config, ainsi que cmd_, paperdir_, check_subscription, clearhistory_, clearalerts_. 
+
+Le handler trading capture menu_autotrade, toggle_autotrade, menu_market_mode, set_market_, menu_analysis_config, toggle_periodic_analysis, set_analysis_, menu_positions, menu_trading_config, trading_open_, trading_reject_, trading_edit_. 
+
+Sous-menu Analyse
+Défini dans la branche menu_analyse. 
+
+📊 Analyse
+├── 📊 Analyse
+│   ├── callback_data : cmd_analyse
+│   ├── Handler : menu_callback → symbol_selection → symbol_callback → analyse
+│   ├── Service : DataFetcher + SignalEngine + HistoryManager
+│   └── État : FONCTIONNE PARTIELLEMENT
+│
+├── 💰 Prix
+│   ├── callback_data : cmd_price
+│   ├── Handler : menu_callback → symbol_selection → symbol_callback → price
+│   ├── Service : DataFetcher
+│   └── État : FONCTIONNE
+│
+├── 📈 Tendance
+│   ├── callback_data : cmd_trend
+│   ├── Handler : menu_callback → symbol_selection → symbol_callback → trend
+│   ├── Service : DataFetcher
+│   └── État : RISQUE D'INCOHÉRENCE DATAFRAME
+│
+├── 🌪 Volatilité
+│   ├── callback_data : cmd_volatility
+│   ├── Handler : menu_callback → symbol_selection → symbol_callback → volatility
+│   ├── Service : DataFetcher + ATR
+│   └── État : RISQUE D'INCOHÉRENCE DATAFRAME
+│
+├── 📍 Niveaux
+│   ├── callback_data : cmd_levels
+│   ├── Handler : menu_callback → symbol_selection → symbol_callback → levels
+│   ├── Service : DataFetcher + support_resistance + fibonacci_levels
+│   └── État : RISQUE D'INCOHÉRENCE DATAFRAME
+│
+├── 🔄 Configuration Analyse Périodique
+│   ├── callback_data : menu_analysis_config
+│   ├── Handler : trading_callback_router
+│   ├── Service : trading_config
+│   └── État : FONCTIONNE
+│
+└── Retour
+    ├── callback_data : menu_back
+    ├── Handler : menu_callback
+    └── État : FONCTIONNE
+Points importants :
+
+analyse() utilise le timeframe et style utilisateur stockés dans settings, appelle SignalEngine.analyze(), génère un graphique, puis appelle HistoryManager.add_signal(). 
+
+WAIT n’est pas persisté par add_signal(), donc l’utilisateur reçoit quand même l’analyse mais sans ID. 
+
+Il existe trois blocs identiques de vérification du nombre de signaux pending dans analyse(), ce qui est une duplication évidente. 
+
+Sélection de symbole
+symbol_selection
+├── Liste SYMBOLS_12
+├── callback_data : symsel_<command>_<symbol>
+├── pagination : sympage_<command>_<page>
+└── Handler : symbol_callback
+La sélection ne propose que SYMBOLS_12, qui contient 10 symboles malgré son nom. 
+
+Sous-menu Alertes
+Défini dans menu_alertes. 
+
+🚨 Alertes
+├── ➕ Alerte
+│   ├── callback_data : cmd_alert
+│   ├── Flux : symbol_selection → condition above/below → input texte prix
+│   └── État : FONCTIONNE
+├── 📑 Alertes
+│   ├── callback_data : cmd_alerts
+│   ├── Fonction : alert_mgr.get_alerts
+│   └── État : FONCTIONNE
+├── ➖ Supprimer alerte
+│   ├── callback_data : cmd_delalert
+│   ├── Fonction : delalert
+│   └── État : FONCTIONNE
+├── 🧹 Effacer alertes
+│   ├── callback_data : cmd_clearalerts → clearalerts_confirm/cancel
+│   └── État : FONCTIONNE
+└── Retour
+    └── callback_data : menu_back
+Le système d’input texte pour alerte est globalement connecté via MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pending_alert_input). 
+
+Sous-menu Watchlist
+Défini dans menu_watchlist. 
+
+📋 Watchlist
+├── 📋 Watchlist
+│   ├── callback_data : cmd_watchlist
+│   ├── Fonction : user_mgr.get_watchlist
+│   └── État : FONCTIONNE
+├── ➕ Ajouter
+│   ├── callback_data : cmd_addwatch
+│   ├── Flux : symbol_selection → addwatch
+│   └── État : FONCTIONNE
+├── ➖ Retirer
+│   ├── callback_data : cmd_removewatch
+│   ├── Flux : symbol_selection → removewatch
+│   └── État : FONCTIONNE
+├── 🔎 Scanner
+│   ├── callback_data : cmd_scan
+│   ├── Service : DataFetcher + SignalEngine
+│   └── État : FONCTIONNE PARTIELLEMENT
+└── Retour
+    └── callback_data : menu_back
+Limitation : la watchlist via menu ne peut ajouter/retirer que les symboles proposés par SYMBOLS_12, pas tous les symboles Binance. 
+
+Sous-menu Paper Trading
+Défini dans menu_paper. 
+
+📈 Paper Trading
+├── 🟢 Acheter / Vendre
+│   ├── callback_data : cmd_paper
+│   ├── Flux : symbol_selection → BUY/SELL buttons → paper()
+│   └── État : CASSÉ pour BUY/SELL via bouton
+├── 📊 Positions ouvertes
+│   ├── callback_data : cmd_paper_status
+│   ├── Fonction : paper(args=["status"])
+│   └── État : FONCTIONNE
+├── 📋 Historique
+│   ├── callback_data : cmd_paper_history
+│   ├── Fonction : paper(args=["history"])
+│   └── État : FONCTIONNE
+├── 📈 Statistiques
+│   ├── callback_data : cmd_paper_stats
+│   ├── Fonction : paper(args=["stats"])
+│   └── État : FONCTIONNE
+├── 🔄 Réinitialiser Compte Paper
+│   ├── callback_data : cmd_paper_reset
+│   ├── Fonction : paper(args=["reset"])
+│   └── État : FONCTIONNE
+└── Retour
+    └── callback_data : menu_back
+Problème précis : paperdir_ construit context.args = [parts[2].lower(), parts[1]]. Pour paperdir_BTCUSD_BUY, cela devient ["buy", "BTCUSD"], ce qui correspond bien à l’API paper().  Mais symbol_callback() crée les boutons avec paperdir_{symbol}_BUY / paperdir_{symbol}_SELL.  Ensuite paper() ne reconnaît pas sell comme ouverture short ; sell est une fermeture de longs, alors que l’ouverture short attend short.  Donc le bouton SELL 🔴 ne crée pas une position short : il tente de fermer une position BUY existante. C’est incohérent avec le libellé “BUY / SELL”.
+
+Sous-menu Paramètres
+Défini par send_settings_menu(). 
+
+⚙️ Paramètres
+├── ⏱ Timeframe
+│   ├── callback_data : cmd_settimeframe
+│   ├── Choix : 5m, 15m, 1h, 4h, 1d
+│   └── État : FONCTIONNE
+├── 🌐 Langue
+│   ├── callback_data : cmd_setlanguage
+│   ├── Choix : FR/EN
+│   └── État : FONCTIONNE
+├── 🎯 Trading Style
+│   ├── callback_data : cmd_setstyle
+│   ├── Choix : scalping, scalping_15m, day, swing, position
+│   └── État : FONCTIONNE PARTIELLEMENT
+├── 📜 Historique
+│   ├── callback_data : cmd_historique
+│   ├── Sous-menu : voir / effacer historique
+│   └── État : FONCTIONNE
+├── 📞 Support
+│   ├── callback_data : cmd_support
+│   └── État : FONCTIONNE
+└── Retour
+    └── callback_data : menu_back
+Incohérence importante : send_settings_menu() est décorée par @check_limit, alors que ce n’est pas un handler Telegram autonome mais une fonction utilitaire appelée avec des paramètres non standard (lang, tf, style, etc.).  Cela semble dangereux : le décorateur check_limit attend un Update en premier argument et fait update.effective_user.id.  Si le décorateur est réellement appliqué à send_settings_menu, les appels comme send_settings_menu(lang, tf, style, uid, ...) devraient provoquer une erreur car lang est une chaîne, pas un Update. Pourtant ce code est appelé depuis menu_parametres, settings, etc. 
+
+Sous-menu AutoTrade Binance
+Défini par trading_callback_router(). 
+
+🤖 AutoTrade Binance
+├── Basculer ON/OFF
+│   ├── callback_data : toggle_autotrade
+│   ├── Fonction : update_config(auto_trade=not config.auto_trade)
+│   └── État : FONCTIONNE
+├── Mode spot/futures
+│   ├── callback_data : menu_market_mode
+│   ├── Sous-menu : set_market_spot / set_market_futures
+│   └── État : FONCTIONNE
+├── Analyse periodique
+│   ├── callback_data : menu_analysis_config
+│   ├── Sous-menu : toggle + intervalle + timeframe + style
+│   └── État : FONCTIONNE
+├── Configuration
+│   ├── callback_data : menu_trading_config
+│   ├── Résumé config
+│   └── État : FONCTIONNE
+└── Menu Principal
+    ├── callback_data : menu_back
+    ├── Handler : menu_callback
+    └── État : FONCTIONNE
+Le mode spot/futures persiste dans trading_config.market_type, donc il est “temporaire” uniquement au sens configuration utilisateur, pas au sens session volatile Telegram. 
+
+Sous-menu Analyse Périodique
+Défini dans trading_handlers.py. 
+
+📊 Configuration Analyse Périodique
+├── Analyse Périodique ACTIVÉE/DÉSACTIVÉE
+│   ├── callback_data : toggle_periodic_analysis
+│   ├── update_config(periodic_analysis_enabled=...)
+│   └── État : FONCTIONNE
+├── 5 min
+│   ├── callback_data : set_analysis_interval_5
+│   ├── update_config(analysis_interval_minutes=5)
+│   └── État : FONCTIONNE
+├── 10 min
+│   ├── callback_data : set_analysis_interval_10
+│   ├── update_config(analysis_interval_minutes=10)
+│   └── État : FONCTIONNE
+├── 5m / 15m / 1h
+│   ├── callback_data : set_analysis_tf_*
+│   ├── update_config(analysis_timeframe=...)
+│   └── État : FONCTIONNE
+├── Scalping 5m / Scalping 15m / Day / Swing / Position
+│   ├── callback_data : set_analysis_style_*
+│   ├── update_config(trading_style=...)
+│   └── État : FONCTIONNE
+├── Retour AutoTrade
+│   └── callback_data : menu_autotrade
+├── Retour Analyse
+│   └── callback_data : menu_analyse
+└── Menu Principal
+    └── callback_data : menu_back
+3. TABLEAU COMPLET DES CALLBACKS
+Callback / pattern	Défini / généré dans	Handler enregistré	Fonction appelée	État	Observations
+menu_analyse	bot_handlers.menu_command, retours	menu_callback	Sous-menu analyse	FONCTIONNE	Capté par regex menu_ général. 
+menu_alertes	Menu principal	menu_callback	Sous-menu alertes	FONCTIONNE	OK. 
+menu_watchlist	Menu principal	menu_callback	Sous-menu watchlist	FONCTIONNE	OK. 
+menu_paper	Menu principal	menu_callback	Sous-menu paper	FONCTIONNE PARTIELLEMENT	Bouton SELL incohérent, voir section 7. 
+menu_account	Menu principal	menu_callback	cmd_account	FONCTIONNE SI clés Binance	Appelle Binance via get_full_account_info. 
+menu_autotrade	Menu principal	trading_callback_router	Sous-menu AutoTrade	FONCTIONNE	Exclu du handler menu général et capté par trading. 
+menu_parametres	Menu principal	menu_callback	send_settings_menu	CASSÉ PROBABLE	send_settings_menu est décorée par @check_limit malgré signature utilitaire. 
+menu_back	Plusieurs menus	menu_callback	Retour menu principal	FONCTIONNE	Capté par menu_ général. 
+cmd_analyse	Sous-menu Analyse	menu_callback	symbol_selection puis analyse	FONCTIONNE PARTIELLEMENT	OK mais symboles limités à SYMBOLS_12. 
+cmd_price	Sous-menu Analyse	menu_callback	symbol_selection puis price	FONCTIONNE	OK. 
+cmd_trend	Sous-menu Analyse	menu_callback	trend	FONCTIONNE PARTIELLEMENT	Risque colonnes dataframe. 
+cmd_volatility	Sous-menu Analyse	menu_callback	volatility	FONCTIONNE PARTIELLEMENT	Risque colonnes dataframe. 
+cmd_levels	Sous-menu Analyse	menu_callback	levels	FONCTIONNE PARTIELLEMENT	Risque colonnes dataframe. 
+menu_analysis_config	Analyse + AutoTrade	trading_callback_router	Config analyse périodique	FONCTIONNE	Bien routé. 
+toggle_periodic_analysis	Analyse périodique	trading_callback_router	update_config(periodic_analysis_enabled)	FONCTIONNE	Le dernier commit a ajouté le routage. 
+set_analysis_interval_5/10	Analyse périodique	trading_callback_router	update_config(analysis_interval_minutes)	FONCTIONNE	Limité à 5/10. 
+set_analysis_tf_5m/15m/1h	Analyse périodique	trading_callback_router	update_config(analysis_timeframe)	FONCTIONNE	Handler accepte aussi 4h/1d mais boutons absents. 
+set_analysis_style_*	Analyse périodique	trading_callback_router	update_config(trading_style)	FONCTIONNE	scalping force 5m ; scalping_15m force 15m. 
+menu_market_mode	AutoTrade	trading_callback_router	Sous-menu spot/futures	FONCTIONNE	OK. 
+set_market_spot/futures	Mode marché	trading_callback_router	update_config(market_type)	FONCTIONNE	Persistant DB, pas session-only. 
+toggle_autotrade	AutoTrade	trading_callback_router	update_config(auto_trade)	FONCTIONNE	OK. 
+menu_positions	AutoTrade	trading_callback_router	get_open_trades	FONCTIONNE	Accessible seulement depuis AutoTrade helper potentiel / callbacks, pas bouton principal direct. 
+menu_trading_config	AutoTrade	trading_callback_router	Résumé config	FONCTIONNE	OK. 
+cmd_alert	Alertes	menu_callback	symbol_selection	FONCTIONNE	OK. 
+cmd_alertcond_<symbol>_above/below	symbol_callback	menu_callback	pending alert input	FONCTIONNE	OK. 
+clearalerts_confirm/cancel	Alertes	menu_callback	clear/cancel	FONCTIONNE	OK. 
+cmd_watchlist/addwatch/removewatch/scan	Watchlist	menu_callback	watchlist operations	FONCTIONNE	Symboles menu limités. 
+sympage_*	Symbol selection	symbol_callback	pagination	FONCTIONNE	OK. 
+symsel_*	Symbol selection	symbol_callback	commande métier	FONCTIONNE PARTIELLEMENT	Paper SELL incohérent. 
+noop	Symbol pagination	symbol_callback	return	FONCTIONNE	Bouton page neutre. 
+cmd_settimeframe_*	Paramètres	menu_callback	user_mgr.set_setting	FONCTIONNE SI menu paramètres accessible	Dépend du bug send_settings_menu. 
+cmd_setstyle_*	Paramètres	menu_callback	user_mgr.set_setting	FONCTIONNE SI menu paramètres accessible	Aucune validation dans callback : toute valeur après setstyle_ serait stockée si bouton malicieux. 
+cmd_setlanguage_*	Paramètres	menu_callback	user_mgr.set_setting	FONCTIONNE SI menu paramètres accessible	Aucune validation dans callback. 
+cmd_historique*	Paramètres	menu_callback	historique	FONCTIONNE	Utilise get_user_signals. 
+cmd_support	Paramètres	menu_callback	texte support	FONCTIONNE	OK. 
+paperdir_<symbol>_BUY	Paper menu	menu_callback	paper(args=["buy", symbol])	FONCTIONNE	Ouvre long. 
+paperdir_<symbol>_SELL	Paper menu	menu_callback	paper(args=["sell", symbol])	CASSÉ SÉMANTIQUE	Ferme long, n’ouvre pas short. 
+plan_pro_stars	Upgrade	plan_callback	send_invoice	FONCTIONNE PARTIELLEMENT	Provider token vide. 
+plan_binance	Upgrade	plan_callback	plan_binance_callback	FONCTIONNE	Génère paiement Binance. 
+terms_show/accept/refuse	Start	terms_callback	Terms flow	FONCTIONNE PARTIELLEMENT	Après accept, appelle start(update, context) avec callback update ; risque si start utilise update.message. 
+trading_open_<id>	Confirmation AutoTrade	trading_callback_router	_confirm_open_signal	FONCTIONNE	Exécute signal. 
+trading_reject_<id>	Confirmation AutoTrade	trading_callback_router	mark_signal_status	FONCTIONNE	OK. 
+trading_edit_<id>	Confirmation AutoTrade	trading_callback_router	Message /editsignal	CASSÉ / MANQUANT	/editsignal n’est pas enregistré dans main.py. 
+check_subscription	Regex menu général	Aucun bouton trouvé	Aucun traitement réel	ORPHELIN	Capté par handler mais pas de branche explicite. 
+clearhistory_	Regex menu général	Aucun bouton actuel trouvé	Aucun traitement dédié préfixe	ORPHELIN	Le bouton actuel est cmd_historique_clear. 
+4. TABLEAU COMPLET DES COMMANDES
+Toutes les commandes ci-dessous sont réellement enregistrées via la liste handlers ou le handler spécial /myid. 
+
+Commande	Handler	Fonctionnalité	Accessible menu natif Telegram ?	État
+/myid	myid_handler	Affiche ID Telegram, sans restriction	Oui	FONCTIONNE. 
+/start	start	Création user, terms, statut	Non	FONCTIONNE PARTIELLEMENT : check_limit vérifie accès avant création effective dans certains cas. 
+/help	help_command	Aide + admin si admin	Oui	FONCTIONNE. 
+/menu	menu_command	Menu principal inline	Oui	FONCTIONNE. 
+/analyse SYMBOL	analyse	Analyse technique + graphique + signal	Oui	FONCTIONNE PARTIELLEMENT : duplication pending count, WAIT non stocké OK. 
+/price SYMBOL	price	Prix realtime	Non	FONCTIONNE. 
+/trend SYMBOL	trend	Tendance SMA20/SMA50	Non	RISQUE DATAFRAME. 
+/volatility SYMBOL	volatility	ATR	Non	RISQUE DATAFRAME. 
+/levels SYMBOL	levels	Supports/résistances/Fib	Non	RISQUE DATAFRAME. 
+/alert SYMBOL above/below PRICE	alert	Crée alerte	Non	FONCTIONNE. 
+/alerts	alerts	Liste alertes	Non	FONCTIONNE. 
+/delalert ID	delalert	Supprime alerte	Non	FONCTIONNE. 
+/clearalerts	clearalerts	Confirmation clear alertes	Non	FONCTIONNE. 
+/watchlist	watchlist_command	Affiche watchlist	Non	FONCTIONNE. 
+/addwatch SYMBOL	addwatch	Ajoute watchlist	Non	FONCTIONNE mais validation symbole absente. 
+/removewatch SYMBOL	removewatch	Retire watchlist	Non	FONCTIONNE. 
+/scan	scan	Scanne watchlist	Non	FONCTIONNE PARTIELLEMENT. 
+/paper ...	paper	Paper trading	Oui	FONCTIONNE PARTIELLEMENT : docs/menus parlent buy/sell, code short séparé. 
+/settings	settings	Paramètres	Oui	CASSÉ PROBABLE à cause du décorateur de send_settings_menu. 
+/settimeframe TF	settimeframe	Timeframe utilisateur	Non	FONCTIONNE. 
+/setstyle STYLE	setstyle	Style utilisateur	Non	FONCTIONNE. 
+/setlanguage fr/en	setlanguage	Langue	Non	FONCTIONNE. 
+/usage	usage	Requêtes restantes	Non	FONCTIONNE. 
+/upgrade	upgrade	Paiements PRO	Oui	FONCTIONNE PARTIELLEMENT : invoice Stars provider_token vide. 
+/support	support	Contact support	Oui	FONCTIONNE. 
+/pay_binance	pay_binance	Paiement Binance	Non	FONCTIONNE. 
+/historique	historique	Historique signaux	Non	FONCTIONNE. 
+/setapikeys	cmd_setapikeys	Stocke clés Binance	Non	FONCTIONNE si DB/env OK. 
+/autotrade	cmd_autotrade	Toggle AutoTrade	Oui	FONCTIONNE, mais uniquement texte, pas menu AutoTrade. 
+/config	cmd_config	Config trading détaillée	Non	FONCTIONNE. 
+/positions	cmd_positions	Positions ouvertes DB	Non	FONCTIONNE. 
+/close ID	cmd_close	Fermeture manuelle trade	Non	FONCTIONNE. 
+/pnl	cmd_pnl	Stats PnL trades fermés	Non	FONCTIONNE. 
+/account	cmd_account	Dashboard Binance	Oui	FONCTIONNE si clés valides. 
+/history_trades	cmd_trade_history	Historique trades réels	Non	FONCTIONNE. 
+/setleverage N	cmd_setleverage	Levier	Non	FONCTIONNE. 
+/setrisk PCT	cmd_setrisk	Risque/trade	Non	FONCTIONNE. 
+/whitelist SYMBOL	cmd_whitelist	Ajoute whitelist AutoTrade	Non	FONCTIONNE. 
+/blacklist SYMBOL	cmd_blacklist	Ajoute blacklist AutoTrade	Non	FONCTIONNE. 
+/emergency_stop	cmd_emergency_stop	Ferme positions et désactive auto	Non	FONCTIONNE PARTIELLEMENT : dépend d’API Binance. 
+/stats	stats	Admin stats users/signaux	Non	FONCTIONNE admin. 
+/teddy USER_ID	teddy	Confirme paiement ou approve user	Non	FONCTIONNE admin. 
+/broadcast TEXT	broadcast	Broadcast	Non	FONCTIONNE admin. 
+/switchapi	switchapi	Change source API DataFetcher	Non	FONCTIONNE admin si méthodes existent. 
+/find_memo MEMO	find_memo	Recherche user paiement Binance	Non	FONCTIONNE admin. 
+/confirm_payment USER_ID	confirm_payment	Passe user PRO	Non	FONCTIONNE admin. 
+/refreshhistory	refreshhistory	Recheck outcomes signaux	Non	FONCTIONNE admin. 
+/clearhistory	clearhistory	Efface tous les signaux	Non	FONCTIONNE admin. 
+/deleteuser USER_ID	deleteuser	Supprime user	Non	FONCTIONNE admin. 
+/exportsignals	exportsignals	Export CSV signaux	Non	FONCTIONNE admin. 
+/dbquery SQL	dbquery	Exécute SQL arbitraire	Non	FONCTIONNE admin mais dangereux. 
+/cleanwaits	cleanwaits	Supprime WAIT historiques	Non	FONCTIONNE admin. 
+/trading_stats	admin_cmd_trading_stats	Stats trades	Non	FONCTIONNE admin. 
+/trades	admin_cmd_trades	Trades ouverts tous users	Non	FONCTIONNE admin. 
+/forceclose USER_ID	admin_cmd_forceclose	Emergency stop utilisateur	Non	FONCTIONNE admin. 
+5. FONCTIONNALITÉS EXISTANTES
+Fonctionnalité	Code présent ?	Accessible depuis menu ?	Accessible par commande ?	Fonctionne ?	Problème
+Menu principal	Oui	Oui	/menu	Oui	Aucun majeur. 
+Conditions d’utilisation	Oui	Depuis /start	/start	Partiel	start() rappelé depuis callback peut utiliser update.message. 
+Analyse technique graphique	Oui	Oui	/analyse	Partiel	Pending check dupliqué 3 fois. 
+Signaux BUY/SELL/WAIT	Oui	Oui	Oui	Oui	WAIT non stocké désormais. 
+Historique signaux	Oui	Oui	/historique	Oui	Filtre WAIT ajouté. 
+Analyse périodique marché Binance	Oui	Oui	Non direct	Oui théorique	Scheduler scanne tous symboles mais peut être très coûteux. 
+Choix intervalle 5/10 min	Oui	Oui	Non direct	Oui	Via callback uniquement. 
+Choix mode spot/futures	Oui	Oui	Via /config lecture uniquement	Oui	Persistant, pas session temporaire volatile. 
+Scalping 5m	Oui	Oui	/setstyle scalping	Oui	OK. 
+Scalping 15m	Oui	Oui	/setstyle scalping_15m	Oui	Nouveau style technique, mais pas traduit. 
+Paper trading long	Oui	Oui	/paper buy SYMBOL	Oui	OK. 
+Paper trading short	Oui	Non correctement	/paper short SYMBOL	Oui par commande	Bouton SELL appelle sell, pas short. 
+Alertes prix	Oui	Oui	Oui	Oui	Monitoring thread séparé. 
+Watchlist	Oui	Oui	Oui	Oui	Menu symboles limité. 
+Paiement Telegram Stars	Oui	Oui	Non	Partiel	provider_token="", probablement non opérationnel. 
+Paiement Binance	Oui	Oui	/pay_binance	Oui	OK si payments.py correct. 
+AutoTrade réel	Oui	Oui	Oui	Partiel	Nécessite clés valides + DB + Binance. 
+Confirmation semi-auto	Oui	Notification	Callback	Partiel	Bouton edit SL/TP renvoie vers commande inexistante. 
+Trailing stop	Oui	Non config UI	Non direct	Partiel	Champs DB existent mais pas menu de modification. 
+DCA	Champs config	Non	Non	Inaccessible	Aucun flux métier visible pour DCA. 
+Whitelist/blacklist	Oui	Non	Oui	Oui	Non exposé menu. 
+Admin	Oui	Non menu	Oui	Oui	Non listé dans BotCommands sauf aide admin. 
+Export signaux	Oui	Non	/exportsignals	Oui	Admin. 
+Import signaux	Script présent dans teddy-bot-v2.git	Non	Non	Inaccessible	Hors app principale.
+Internationalisation	Oui	Oui	Oui	Partiel	Clé EN settings_timeframe absente d’après scan. 
+6. FONCTIONNALITÉS ACCESSIBLES
+Utilisateur standard
+Fonctionnalité	Accès menu	Accès commande
+Menu principal	/menu	/menu
+Aide	Non	/help
+Analyse technique	Menu Analyse → Analyse → symbole	/analyse SYMBOL
+Prix	Menu Analyse → Prix → symbole	/price SYMBOL
+Tendance	Menu Analyse → Tendance → symbole	/trend SYMBOL
+Volatilité	Menu Analyse → Volatilité → symbole	/volatility SYMBOL
+Niveaux	Menu Analyse → Niveaux → symbole	/levels SYMBOL
+Alertes	Menu Alertes	/alert, /alerts, /delalert, /clearalerts
+Watchlist	Menu Watchlist	/watchlist, /addwatch, /removewatch, /scan
+Paper trading	Menu Paper	/paper ...
+Compte Binance	Bouton “Mon Compte”	/account
+AutoTrade	Bouton “AutoTrade Binance”	/autotrade, /config, /positions, etc.
+Spot/Futures	AutoTrade → Mode spot/futures	Pas de commande dédiée
+Analyse périodique	Analyse → Configuration Analyse Périodique ou AutoTrade → Analyse périodique	Pas de commande dédiée
+Paramètres utilisateur	Menu Paramètres	/settings, /settimeframe, /setstyle, /setlanguage
+Historique signaux	Paramètres → Historique	/historique
+Upgrade	/upgrade	/upgrade, /pay_binance
+Support	Paramètres → Support	/support
+ID Telegram	Non menu principal	/myid
+Admin
+Les commandes admin existent et sont enregistrées, mais ne sont pas exposées dans le menu principal. L’aide admin les liste via help_admin. 
+
+7. FONCTIONNALITÉS CASSÉES
+7.1 Menu Paramètres probablement cassé par décorateur incorrect
+send_settings_menu() est décorée par @check_limit, mais elle n’a pas une signature de handler Telegram ; elle prend lang, tf, style, uid, send_fn.  Le décorateur check_limit attend que le premier argument soit un objet Update et lit update.effective_user.id.  Les appels actuels passent une string comme premier argument. 
+
+Impact probable : /settings, bouton menu_parametres, retours après choix timeframe/style/langue peuvent lever AttributeError: 'str' object has no attribute 'effective_user'.
+
+Confiance : élevée.
+
+7.2 Bouton Paper SELL incohérent
+Le bouton SELL 🔴 génère paperdir_{symbol}_SELL.  Le routeur convertit cela en context.args = ["sell", symbol].  Or paper() documente short pour ouvrir un short, tandis que sell ferme toutes les positions BUY du symbole. 
+
+Impact : depuis le menu, l’utilisateur qui clique SELL n’ouvre pas de short ; il tente une fermeture.
+
+Confiance : élevée.
+
+7.3 Bouton “Modifier SL/TP” cassé
+Le prompt semi-automatique ajoute trading_edit_<id>.  Le callback répond à l’utilisateur d’utiliser /editsignal <id> <nouveau_sl> <nouveau_tp>.  Aucune commande /editsignal n’est enregistrée dans main.py. 
+
+Impact : fonctionnalité annoncée mais inutilisable.
+
+Confiance : élevée.
+
+7.4 Monitoring paper dans position_manager cassé / doublonné
+position_manager.monitor_open_positions() tente from paper_trader import paper_trader.  Or paper_trader.py définit la classe PaperTrader, mais ne définit pas de singleton module paper_trader en fin de fichier.  Le singleton existe dans bot_handlers.py sous forme locale paper_trader = PaperTrader(). 
+
+Impact : le bloc paper de monitor_open_positions() échoue et loggue une erreur à chaque passage. Il existe déjà une autre surveillance paper dans bot_handlers.check_paper_exits(), donc il y a aussi duplication de responsabilité. 
+
+Confiance : élevée.
+
+7.5 settings_timeframe absent en anglais
+Les clés anglaises autour de settings contiennent settings_style, settings_lang, settings_edit, mais pas settings_timeframe dans la zone anglaise détectée.  send_settings_menu() appelle get_text(lang, 'settings_timeframe').  get_text() renvoie la clé brute si absente. 
+
+Impact : en anglais, le menu peut afficher settings_timeframe : 1h.
+
+Confiance : moyen à élevé.
+
+7.6 /autotrade n’ouvre pas le menu AutoTrade
+La commande /autotrade fait uniquement un toggle ON/OFF après vérification des clés.  Pourtant le menu Telegram visible la décrit comme “Menu AutoTrade Binance”. 
+
+Impact : incohérence UX ; l’utilisateur peut activer/désactiver sans voir/configurer le module.
+
+Confiance : élevé.
+
+7.7 Paiement Telegram Stars probablement non fonctionnel
+send_invoice() appelle reply_invoice(... provider_token="", currency="XTR", ...).  Selon le contexte Telegram Stars, cela peut être volontaire pour XTR, mais le code ne documente pas l’intention ni ne gère d’erreur. À auditer en environnement réel.
+
+Confiance : moyen.
+
+8. FONCTIONNALITÉS MANQUANTES OU INACCESSIBLES
+Fonctionnalité	Code présent	Problème d’accès
+Édition SL/TP d’un signal	Bouton trading_edit_ présent	Commande /editsignal manquante. 
+DCA	Champs dca_enabled, dca_steps, dca_step_pct en DB/config	Aucun menu/commande de réglage DCA, aucun flux d’exécution visible. 
+Trailing stop config	Champs DB/config + logique update SL	Aucun bouton/commande pour activer/désactiver ou modifier trailing_stop_pct. 
+Max positions	Champ config	Pas de commande/menu utilisateur. 
+Min score AutoTrade	Champ config	Pas de commande/menu utilisateur. 
+Max daily loss	Champ config + risque	Pas de commande/menu utilisateur. 
+Cooldown	Champ config + risque	Pas de commande/menu utilisateur visible. 
+Whitelist/blacklist depuis menu	Commandes présentes	Non exposées dans AutoTrade menu. 
+Choix testnet/mainnet	Champ config + credentials	Pas de commande/menu utilisateur. 
+Positions réelles depuis menu principal	menu_positions existe	Pas de bouton dans menu principal, seulement AutoTrade helper/menu potentiel. 
+Historique trades réels depuis menu	cmd_trade_history existe	Pas de bouton AutoTrade. 
+PnL réel depuis menu	cmd_pnl existe	Pas de bouton AutoTrade. 
+Set leverage / risk depuis menu	Commandes présentes	Pas de boutons dans menu_trading_config. 
+Tous symboles Binance en sélection utilisateur	Binance manager sait lister tous symboles	Les menus analyse/watchlist/paper utilisent seulement SYMBOLS_12. 
+9. FONCTIONNALITÉS QUI SEMBLENT AVOIR ÉTÉ SUPPRIMÉES
+9.1 Suppression de nombreuses commandes du menu natif Telegram
+Dans HEAD^, le menu natif BotCommand exposait beaucoup de commandes détaillées : /price, /trend, /volatility, /levels, /alert, /alerts, /watchlist, /scan, /positions, /close, /pnl, /history_trades, /config, /setapikeys, /setleverage, etc. La preuve est dans l’historique Git consulté : git show HEAD^:main.py montre ces entrées. Le commit actuel n’expose plus que 10 commandes dans commands = [...]. 
+
+Ce que ça faisait auparavant : rendait les commandes spécialisées visibles dans le menu natif de Telegram.
+
+Où cela semble supprimé : main.py, bloc post_init.
+
+Nuance importante : les commandes ne sont pas supprimées du bot ; elles restent enregistrées dans handlers.  Elles sont seulement retirées de la liste visible via set_my_commands.
+
+Niveau de confiance : élevé.
+
+9.2 Historique WAIT visible avant dernier commit
+Dans l’état précédent, get_recent_signals() et get_signal_by_id() ne filtraient pas direction='WAIT', d’après git show HEAD^:history_manager.py. Le code actuel filtre les WAIT à la lecture. 
+
+Ce que ça faisait auparavant : affichait/exportait potentiellement d’anciens WAIT.
+
+Où cela a changé : history_manager.py.
+
+Niveau de confiance : élevé.
+
+9.3 Possible ancienne intention d’avoir un builder AutoTrade intégré
+build_autotrade_menu_buttons() existe mais son docstring dit “À insérer dans build_main_menu() du bot existant”.  Aucun build_main_menu() n’existe dans les handlers actuels ; le menu principal est construit inline dans menu_command() et menu_back. 
+
+Ce que ça faisait / devait faire : fournir des boutons AutoTrade réutilisables.
+
+Où c’est aujourd’hui : fonction orpheline dans trading_handlers.py.
+
+Niveau de confiance : moyen.
+
+10. COMMANDES OU BOUTONS QUI N'ABOUTISSENT À RIEN
+Élément	Type	Symptôme	Preuve
+trading_edit_<id>	Bouton	Donne instruction /editsignal, mais commande non enregistrée	
+check_subscription	Callback pattern	Capté par regex mais aucune branche explicite dans menu_callback	
+clearhistory_	Callback pattern	Capté par regex mais aucun bouton/traitement préfixe actuel trouvé	
+SELL 🔴 paper	Bouton	Ne short pas ; appelle l’action sell qui ferme les longs	
+/autotrade	Commande	Ne montre pas le menu AutoTrade ; toggle direct	
+build_autotrade_menu_buttons()	Fonction	Fonction non appelée	
+trailing_stop, dca_enabled, max_positions, min_score config avancée	Fonctionnalité	Champs présents mais pas de bouton de modification	
+11. ERREURS ET INCOHÉRENCES
+Incohérences menus / callbacks
+send_settings_menu() décorée à tort : c’est le problème le plus critique car il peut casser /settings et le bouton Paramètres. 
+
+Paper SELL vs short : le menu promet achat/vente mais la commande interne sell ferme au lieu d’ouvrir short. 
+
+Bouton edit SL/TP sans commande associée. 
+
+Callbacks orphelins dans regex : check_subscription, clearhistory_. 
+
+Incohérences commandes / visibilité
+Beaucoup de commandes sont enregistrées mais retirées du menu natif Telegram. 
+
+/autotrade est visible comme “Menu AutoTrade Binance”, mais ne montre pas le menu. 
+
+Incohérences trading
+Mode spot/futures : le choix est persisté en DB, pas temporaire de session. Cela peut être acceptable selon logique projet, mais ne correspond pas strictement au mot “temporairement”. 
+
+Analyse périodique : elle scanne tous les symboles tradables via get_tradable_symbols(), puis applique whitelist/blacklist.  C’est fonctionnel mais très coûteux si beaucoup d’utilisateurs sont activés.
+
+Spot + SELL : open_position() rejette les shorts spot.  C’est logique, mais les signaux SELL en spot peuvent devenir des erreurs d’exécution si non filtrés avant tentative.
+
+Incohérences base de données
+Le schéma signals inclut direction, status, validation_status, etc.  HistoryManager.add_signal() ignore WAIT, puis stocke BUY/SELL avec pending si validé. 
+
+Les champs DCA/trailing existent en DB/config mais sont peu ou pas branchés dans l’interface. 
+
+Erreurs silencieuses
+safe_edit() finit par except Exception: pass, donc certains échecs d’édition/envoi disparaissent sans log. 
+
+UserManager.add_to_watchlist() ignore silencieusement les exceptions d’insert. 
+
+position_manager.monitor_open_positions() ignore silencieusement certaines erreurs d’envoi paper et loggue seulement globalement l’import impossible probable de paper_trader. 
+
+process_signal_for_user() ignore silencieusement un signal sous min_score sans le marquer skipped, donc il peut être repris indéfiniment par fetch_pending_signals(). 
+
+12. PLAN DE RESTAURATION PROPOSÉ
+Important : je ne l’ai pas exécuté. Ceci est uniquement un plan.
+
+Priorité 1 — Réparer les vrais cassages utilisateur
+Retirer le décorateur @check_limit de send_settings_menu() ou séparer helper/handler.
+
+Fichier concerné : bot_handlers.py.
+
+Objectif : restaurer /settings, menu_parametres, retours après style/timeframe/langue.
+
+Justification : signature incompatible avec check_limit. 
+
+Corriger le bouton Paper SELL pour ouvrir un short ou renommer le bouton.
+
+Fichier concerné : bot_handlers.py.
+
+Option A : bouton SHORT 🔴 → paperdir_<symbol>_SHORT puis mapping vers short.
+
+Option B : conserver SELL mais changer le routeur pour passer short.
+
+Justification : incohérence actuelle entre bouton et comportement. 
+
+Implémenter ou retirer l’option “Modifier SL/TP”.
+
+Fichiers concernés : trading_handlers.py, main.py, possiblement history_manager.py.
+
+Option A : créer /editsignal.
+
+Option B : remplacer le bouton par une réponse “fonction à venir” non ambiguë.
+
+Justification : bouton actuellement non abouti. 
+
+Priorité 2 — Restaurer la cohérence menus/commandes
+Décider explicitement de la politique BotCommand.
+
+Fichier concerné : main.py.
+
+Si l’objectif est “catégories seulement”, alors /analyse ne devrait pas être décrit comme “Menu analyse” tout en exigeant un symbole.
+
+Si l’objectif est “toutes commandes visibles”, restaurer les commandes retirées du menu natif en les classant dans /help.
+
+Justification : commandes enregistrées mais invisibles. 
+
+Faire de /autotrade un menu ou renommer sa description.
+
+Fichiers concernés : main.py, trading_handlers.py.
+
+Option A : /autotrade affiche le menu AutoTrade.
+
+Option B : description “Activer/désactiver AutoTrade”.
+
+Justification : description actuelle incohérente. 
+
+Ajouter les boutons manquants dans AutoTrade config.
+
+Fichier concerné : trading_handlers.py.
+
+Ajouter accès menu à /positions, /pnl, /history_trades, /setleverage, /setrisk, whitelist/blacklist, trailing stop, max positions, min score.
+
+Justification : fonctionnalités présentes mais peu accessibles. 
+
+Priorité 3 — Stabiliser tâches périodiques et persistance
+Supprimer ou reconnecter le monitoring paper dupliqué.
+
+Fichiers concernés : position_manager.py, bot_handlers.py, paper_trader.py.
+
+Option A : exposer un singleton paper_trader dans paper_trader.py.
+
+Option B : supprimer la surveillance paper de position_manager et garder check_paper_exits.
+
+Justification : import cassé probable + double responsabilité. 
+
+Marquer les signaux sous min_score comme skipped ou filtrer dès la requête.
+
+Fichier concerné : execution_engine.py.
+
+Justification : éviter boucle silencieuse sur signaux non exécutables. 
+
+Filtrer SELL en mode spot avant insertion/exécution AutoTrade.
+
+Fichiers concernés : execution_engine.py, binance_manager.py, possiblement signal_engine.py.
+
+Justification : open_position() rejette les SELL spot. 
+
+Priorité 4 — Nettoyage cohérence / i18n
+Ajouter la clé EN settings_timeframe.
+
+Fichier concerné : i18n.py.
+
+Justification : éviter affichage brut de clé. 
+
+Nettoyer callbacks orphelins dans regex ou réimplémenter les fonctionnalités.
+
+Fichier concerné : main.py, bot_handlers.py.
+
+Cibles : check_subscription, clearhistory_.
+
+Justification : callbacks captés mais non traités. 
+
+Factoriser le menu principal pour éviter duplication menu_command / menu_back.
+
+Fichier concerné : bot_handlers.py.
+
+Justification : même clavier reconstruit à deux endroits. 
+
+Priorité 5 — Éviter les régressions
+Ajouter tests unitaires légers de routage callback sans Telegram réel.
+
+Fichiers concernés : nouveaux tests éventuels.
+
+Vérifier au minimum : chaque callback_data généré est capté par un CallbackQueryHandler et traité par une branche.
+
+Ajouter test statique des commandes.
+
+Vérifier : commandes visibles BotCommand cohérentes avec handlers enregistrés.
+
+Ajouter test i18n.
+
+Vérifier : toute clé littérale get_text() existe en fr et en.
+
+Ajouter test de non-persistance WAIT.
+
+Vérifier : HistoryManager.add_signal(... direction="WAIT") retourne None et ne fait pas d’insert.
+
+Conclusion audit : les briques principales du bot existent encore et la majorité des commandes restent enregistrées. Les régressions les plus probables sont UX/menus, avec un vrai point cassant fort sur send_settings_menu() décorée à tort, un bouton Paper SELL incohérent, et un bouton AutoTrade “Modifier SL/TP” qui renvoie vers une commande inexistante. Aucune correction n’a été effectuée pendant cet audit.

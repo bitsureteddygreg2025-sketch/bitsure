@@ -160,8 +160,17 @@ async def process_signal_for_user(context: ContextTypes.DEFAULT_TYPE, signal: di
     user_id = signal["user_id"]
     config = get_config(user_id)
 
+    if config.market_type == "spot" and signal["direction"] == "SELL":
+        # Binance Spot standard ne supporte pas la vente à découvert (voir
+        # binance_manager.open_position). Autant rejeter ici plutôt que de
+        # tenter une exécution vouée à l'échec, ou proposer un bouton
+        # "✅ Ouvrir" en semi-auto qui échouerait systématiquement au clic.
+        mark_signal_status(signal["id"], "rejected")
+        return
+
     if signal["score"] is not None and signal["score"] < config.min_score:
-        return  # score trop faible, on ignore silencieusement
+        mark_signal_status(signal["id"], "skipped")
+        return
 
     risk_check = check_can_open_position(user_id, config, signal["symbol"])
     if not risk_check.allowed:
@@ -249,6 +258,7 @@ def _format_market_scan_report(
     saved: list[tuple[str, dict, str]],
     rejected_by_risk: int,
     errors: int,
+    rejected_spot_sell: int = 0,
 ) -> str:
     lines = [
         "📊 *Rapport analyse marché Binance*",
@@ -258,6 +268,8 @@ def _format_market_scan_report(
         f"Refus risque/config : {rejected_by_risk}",
         f"Erreurs données/API : {errors}",
     ]
+    if rejected_spot_sell:
+        lines.append(f"SELL ignorés (spot) : {rejected_spot_sell}")
     if saved:
         lines.append("")
         lines.append("*Top signaux sauvegardés*")
@@ -301,6 +313,7 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
         scanned = 0
         rejected_by_risk = 0
         errors = 0
+        rejected_spot_sell = 0
         saved: list[tuple[str, dict, str]] = []
 
         for symbol in symbols:
@@ -332,6 +345,12 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                 logger.info(f"[{symbol}] Prix: {price:.4f} | RSI: {rsi} | MACD: {macd} | Score: {score} | Signal: {sig}")
 
                 if sig not in ("BUY", "SELL"):
+                    continue
+
+                if config.market_type == "spot" and sig == "SELL":
+                    # Binance Spot standard ne supporte pas le short : inutile de
+                    # sauvegarder un signal qui ne pourra jamais être exécuté.
+                    rejected_spot_sell += 1
                     continue
 
                 risk_check = check_can_open_position(user_id, config, symbol)
@@ -366,11 +385,10 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                 errors += 1
                 log_error(logger, user_id, f"scheduled_market_analysis.{symbol}", str(e))
 
-        report = _format_market_scan_report(config, scanned, saved, rejected_by_risk, errors)
+        report = _format_market_scan_report(config, scanned, saved, rejected_by_risk, errors, rejected_spot_sell)
         logger.info(f"--- Rapport final User {user_id} ---\n{report}")
         try:
             if context and hasattr(context, "bot"):
                 await context.bot.send_message(chat_id=user_id, text=report, parse_mode="Markdown")
         except Exception as e:
             log_error(logger, user_id, "scheduled_market_analysis.report", str(e))
-

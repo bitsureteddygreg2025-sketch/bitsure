@@ -671,6 +671,7 @@ TEXTS = {
 
         # ----- Settings -----
         "settings_title": "*⚙️ Your current settings*",
+        'settings_timeframe': '⏱️ Timeframe',
         'settings_style': '🎯 Trading Style',
         'settings_lang': '🌐 Language',
         'settings_edit': 'What do you want to change?',
