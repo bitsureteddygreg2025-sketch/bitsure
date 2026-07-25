@@ -117,6 +117,14 @@ from trading_handlers import (
     cmd_editsignal,
     trading_callback_router,
 )
+from live_handlers import (
+    cmd_live,
+    cmd_live_cancel,
+    cmd_live_close,
+    cmd_live_long,
+    cmd_live_short,
+    live_callback_router,
+)
 from execution_engine import scheduled_market_analysis, scheduled_signal_scan
 from position_manager import monitor_open_positions
 
@@ -183,6 +191,7 @@ def main():
             BotCommand("analyse", "Menu analyse et signaux"),
             BotCommand("paper", "Menu paper trading"),
             BotCommand("autotrade", "Menu AutoTrade Binance"),
+            BotCommand("live", "Menu Live Trading"),
             BotCommand("account", "Menu compte Binance"),
             BotCommand("settings", "Menu paramètres"),
             BotCommand("upgrade", "Offre PRO"),
@@ -284,6 +293,14 @@ def main():
         ("emergency_stop", cmd_emergency_stop),
         ("editsignal", cmd_editsignal),
 
+        # ================= LIVE TRADING =================
+
+        ("live", cmd_live),
+        ("live_long", cmd_live_long),
+        ("live_short", cmd_live_short),
+        ("live_close", cmd_live_close),
+        ("live_cancel", cmd_live_cancel),
+
         # ================= ADMIN =================
 
         ("stats", stats),
@@ -342,10 +359,10 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             menu_callback,
-            pattern="^(menu_(?!autotrade|market_mode|analysis_config|positions|trading_config|leverage|risk|maxpos|minscore|trailing|whitelist|blacklist|pnl|history_trades)|cmd_|paperdir_|clearalerts_)"
+pattern="^(menu_(?!autotrade|live|market_mode|analysis_config|positions|trading_config|leverage|risk|maxpos|minscore|trailing|whitelist|blacklist|pnl|history_trades)|cmd_|paperdir_|clearalerts_)"
         )
     )
-
+    
     app.add_handler(
         CallbackQueryHandler(
             symbol_callback,
@@ -364,6 +381,13 @@ def main():
         CallbackQueryHandler(
             trading_callback_router,
             pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_|menu_leverage|set_leverage_|menu_risk|set_risk_|menu_maxpos|set_maxpos_|menu_minscore|set_minscore_|menu_trailing|toggle_trailing|set_trailing_|menu_whitelist|menu_blacklist|menu_pnl|menu_history_trades)"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            live_callback_router,
+            pattern="^(menu_live|live_)"
         )
     )
 

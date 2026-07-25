@@ -164,6 +164,7 @@ def _build_main_menu_keyboard(lang: str) -> list:
         [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
         [InlineKeyboardButton("💼 Mon Compte (Solde & PnL)", callback_data="menu_account")],
         [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
+        [InlineKeyboardButton("🚨 Live Trading", callback_data="menu_live")],
         [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
     ]
 
