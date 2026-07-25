@@ -214,7 +214,12 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if info.get("recent_trades"):
         lines.append(f"\n💸 *Commissions Récentes* : `{info['total_commissions']:.4f} USDT`")
 
-    keyboard = [[InlineKeyboardButton("🔄 Rafraîchir", callback_data="cmd_account")]]
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Rafraîchir", callback_data="cmd_account"),
+            InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back"),
+        ]
+    ]
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -341,19 +346,24 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("Mode spot/futures", callback_data="menu_market_mode")],
             [InlineKeyboardButton("Analyse periodique", callback_data="menu_analysis_config")],
             [InlineKeyboardButton("Configuration", callback_data="menu_trading_config")],
+            [InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")],
         ])
         await query.edit_message_text(
-            f"Mode automatique : {status}\n"
-            f"Marche : {config.market_type}\n"
-            f"Analyse : {config.analysis_timeframe} / {config.analysis_interval_minutes} min\n"
-            f"Style : {config.trading_style}",
+            f"🤖 *AutoTrade Binance*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"Mode automatique : *{status}*\n"
+            f"Marché : *{config.market_type.upper()}*\n"
+            f"Analyse : *{config.analysis_timeframe} / {config.analysis_interval_minutes} min*\n"
+            f"Style : *{config.trading_style}*",
             reply_markup=keyboard,
+            parse_mode="Markdown"
         )
 
     elif data == "toggle_autotrade":
         config = get_config(user_id)
         update_config(user_id, auto_trade=not config.auto_trade)
-        await query.edit_message_text("Configuration mise à jour. Relance /autotrade pour voir le nouvel état.")
+        query.data = "menu_autotrade"
+        await trading_callback_router(update, context)
 
     elif data == "menu_market_mode":
         config = get_config(user_id)
@@ -364,7 +374,10 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton(spot_label, callback_data="set_market_spot"),
                 InlineKeyboardButton(futures_label, callback_data="set_market_futures"),
             ],
-            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade")],
+            [
+                InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"),
+                InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back"),
+            ],
         ])
         await query.edit_message_text(
             f"🎯 *Mode de Marché Actuel :* `{config.market_type.upper()}`\n\n"
@@ -379,7 +392,6 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text("Mode de marché invalide.")
             return
         update_config(user_id, market_type=market_type)
-        # Re-render menu_market_mode directly
         query.data = "menu_market_mode"
         await trading_callback_router(update, context)
 
@@ -407,7 +419,11 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("Swing", callback_data="set_analysis_style_swing"),
                 InlineKeyboardButton("Position", callback_data="set_analysis_style_position"),
             ],
-            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade")],
+            [
+                InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"),
+                InlineKeyboardButton("⬅️ Retour Analyse", callback_data="menu_analyse"),
+                InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back"),
+            ],
         ])
         await query.edit_message_text(
             f"📊 *Configuration Analyse Périodique*\n\n"
@@ -432,7 +448,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text("Intervalle invalide.")
             return
         update_config(user_id, analysis_interval_minutes=interval)
-        await query.edit_message_text(f"Analyse periodique configuree toutes les {interval} minutes.")
+        query.data = "menu_analysis_config"
+        await trading_callback_router(update, context)
 
     elif data.startswith("set_analysis_tf_"):
         timeframe = data.replace("set_analysis_tf_", "")
@@ -440,7 +457,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text("Timeframe invalide.")
             return
         update_config(user_id, analysis_timeframe=timeframe)
-        await query.edit_message_text(f"Timeframe d'analyse mis a jour : {timeframe}")
+        query.data = "menu_analysis_config"
+        await trading_callback_router(update, context)
 
     elif data.startswith("set_analysis_style_"):
         style = data.replace("set_analysis_style_", "")
@@ -451,22 +469,38 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         if style == "scalping":
             fields["analysis_timeframe"] = "5m"
         update_config(user_id, **fields)
-        await query.edit_message_text(f"Style d'analyse mis a jour : {style}")
+        query.data = "menu_analysis_config"
+        await trading_callback_router(update, context)
 
     elif data == "menu_positions":
         trades = get_open_trades(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_positions")],
+            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+        ])
         if not trades:
-            await query.edit_message_text("Aucune position ouverte.")
+            await query.edit_message_text("📈 *Positions ouvertes :*\n\nAucune position ouverte actuellement.", reply_markup=keyboard, parse_mode="Markdown")
             return
-        lines = [f"#{t['id']} {t['symbol']} {t['direction']} qty={t['quantity']}" for t in trades]
-        await query.edit_message_text("📈 Positions ouvertes :\n" + "\n".join(lines))
+        lines = [f"#{t['id']} {t['symbol']} {t['direction']} qty={t['quantity']} (SL {t['sl_price']} / TP {t['tp_price']})" for t in trades]
+        await query.edit_message_text("📈 *Positions ouvertes :*\n\n" + "\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
 
     elif data == "menu_trading_config":
         config = get_config(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+        ])
         await query.edit_message_text(
-            f"Levier x{config.leverage} | Risque {config.risk_per_trade}% | "
-            f"Marche {config.market_type} | Analyse {config.analysis_timeframe}/{config.analysis_interval_minutes}m | Style {config.trading_style}\n"
-            f"Max positions {config.max_positions}\nUtilise /config pour le détail complet."
+            f"⚙️ *Trading Config*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"Levier : x{config.leverage}\n"
+            f"Risque/trade : {config.risk_per_trade}%\n"
+            f"Marché : {config.market_type}\n"
+            f"Analyse : {config.analysis_timeframe}/{config.analysis_interval_minutes}m\n"
+            f"Style : {config.trading_style}\n"
+            f"Max positions : {config.max_positions}\n\n"
+            f"_Utilise /config pour le détail complet._",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
         )
 
     elif data.startswith("trading_open_"):

@@ -48,11 +48,17 @@ from bot_handlers import (
     alert,
     alerts,
     delalert,
+    clearalerts,
+    watchlist_command,
+    addwatch,
+    removewatch,
+    scan,
     trend,
     volatility,
     levels,
     settings,
     settimeframe,
+    setstyle,
     setlanguage,
     usage,
     upgrade,
@@ -168,7 +174,55 @@ def main():
 
     alert_mgr = AlertManager.get_instance()
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    async def post_init(application):
+        from telegram import BotCommand
+        commands = [
+            BotCommand("menu", "Menu principal interactif"),
+            BotCommand("help", "Liste de toutes les commandes"),
+            BotCommand("analyse", "Analyse technique complète"),
+            BotCommand("price", "Prix en temps réel"),
+            BotCommand("trend", "Analyse de tendance"),
+            BotCommand("volatility", "Volatilité (ATR)"),
+            BotCommand("levels", "Supports, résistances & Fib"),
+            BotCommand("alert", "Créer une alerte de prix"),
+            BotCommand("alerts", "Afficher vos alertes"),
+            BotCommand("delalert", "Supprimer une alerte"),
+            BotCommand("clearalerts", "Effacer toutes les alertes"),
+            BotCommand("watchlist", "Afficher votre liste de suivi"),
+            BotCommand("addwatch", "Ajouter un symbole à la liste"),
+            BotCommand("removewatch", "Retirer un symbole de la liste"),
+            BotCommand("scan", "Scanner votre liste de suivi"),
+            BotCommand("paper", "Module de paper trading"),
+            BotCommand("autotrade", "Activer/désactiver l'AutoTrade"),
+            BotCommand("account", "Tableau de bord Binance"),
+            BotCommand("positions", "Positions ouvertes Binance"),
+            BotCommand("close", "Fermer une position Binance"),
+            BotCommand("pnl", "Statistiques PnL"),
+            BotCommand("history_trades", "Historique trades Binance"),
+            BotCommand("config", "Configuration AutoTrade"),
+            BotCommand("setapikeys", "Configurer vos clés API Binance"),
+            BotCommand("setleverage", "Définir le levier"),
+            BotCommand("setrisk", "Définir le risque par trade"),
+            BotCommand("whitelist", "Ajouter un symbole à la whitelist"),
+            BotCommand("blacklist", "Exclure un symbole"),
+            BotCommand("emergency_stop", "Fermer toutes les positions"),
+            BotCommand("settings", "Afficher vos paramètres"),
+            BotCommand("settimeframe", "Définir l'unité de temps"),
+            BotCommand("setstyle", "Définir le style de trading"),
+            BotCommand("setlanguage", "Changer la langue (fr/en)"),
+            BotCommand("historique", "Historique récent des signaux"),
+            BotCommand("usage", "Requêtes restantes"),
+            BotCommand("upgrade", "Offre PRO"),
+            BotCommand("support", "Support & contact"),
+            BotCommand("myid", "Mon ID Telegram"),
+        ]
+        try:
+            await application.bot.set_my_commands(commands)
+            logger.info("Telegram menu commands updated.")
+        except Exception as e:
+            logger.warning(f"Failed to set Telegram commands: {e}")
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.bot_data["data_fetcher"] = DataFetcher.get_instance()
 
     # =====================================================
@@ -220,11 +274,18 @@ def main():
         ("alert", alert),
         ("alerts", alerts),
         ("delalert", delalert),
+        ("clearalerts", clearalerts),
+
+        ("watchlist", watchlist_command),
+        ("addwatch", addwatch),
+        ("removewatch", removewatch),
+        ("scan", scan),
 
         ("paper", paper),
 
         ("settings", settings),
         ("settimeframe", settimeframe),
+        ("setstyle", setstyle),
         ("setlanguage", setlanguage),
 
         ("usage", usage),
@@ -307,7 +368,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             menu_callback,
-            pattern="^(menu_(?!autotrade|positions|trading_config)|cmd_|paperdir_|check_subscription|clearhistory_)"
+            pattern="^(menu_(?!autotrade|positions|trading_config)|cmd_|paperdir_|check_subscription|clearhistory_|clearalerts_)"
         )
     )
 

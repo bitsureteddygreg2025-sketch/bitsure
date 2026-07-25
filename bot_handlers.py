@@ -287,31 +287,40 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("cmd_"):
         cmd = data[4:]
+        if cmd == "account":
+            from trading_handlers import cmd_account
+            await cmd_account(update, context)
+            return
+
         if cmd.startswith("alertcond_"):
             _, symbol, cond = cmd.split("_")
             context.user_data["pending_alert_symbol"] = symbol
             context.user_data["pending_alert_cond"] = cond
-            await query.message.reply_text(get_text(lang, "alert_enter_price"))
+            await safe_edit(get_text(lang, "alert_enter_price"), [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_alertes")]])
             return
 
         if cmd.startswith("settimeframe_"):
-            context.args = [cmd.split("_", 1)[1]]
-            await settimeframe(update, context)
+            tf = cmd.split("_", 1)[1]
+            user_mgr.set_setting(update.effective_user.id, "timeframe", tf)
+            style = user_mgr.get_setting(update.effective_user.id, "trading_style", "day")
+            await send_settings_menu(lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
 
         if cmd.startswith("setstyle_"):
             style = cmd.split("_", 1)[1]
             user_mgr.set_setting(update.effective_user.id, "trading_style", style)
-            style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)"}
             if style == "scalping":
                 user_mgr.set_setting(update.effective_user.id, "timeframe", "5m")
-            style_names.update({"scalping": "Scalping (5m)"})
-            await query.message.reply_text(f"Style set to: {style_names.get(style, style)}")
+            tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+            await send_settings_menu(lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
 
         if cmd.startswith("setlanguage_"):
-            context.args = [cmd.split("_", 1)[1]]
-            await setlanguage(update, context)
+            new_lang = cmd.split("_", 1)[1]
+            user_mgr.set_setting(update.effective_user.id, "lang", new_lang)
+            tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+            style = user_mgr.get_setting(update.effective_user.id, "trading_style", "day")
+            await send_settings_menu(new_lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
 
         if cmd.startswith("delalert_"):
@@ -324,28 +333,38 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif cmd == "alerts":
             alerts_list = alert_mgr.get_alerts(user_id)
+            kb = [
+                [InlineKeyboardButton("➕ Nouvelle alerte", callback_data="cmd_alert"), InlineKeyboardButton("🗑️ Supprimer", callback_data="cmd_delalert")],
+                [InlineKeyboardButton("🗑️ Effacer tout", callback_data="cmd_clearalerts")],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_alertes"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+            ]
             if not alerts_list:
-                await query.message.reply_text(get_text(lang, "alerts_empty"))
+                await safe_edit(get_text(lang, "alerts_empty"), kb)
             else:
                 text = get_text(lang, "alerts_list_title")
                 for a in alerts_list:
                     status = "✅" if a.get("triggered") else "⏳"
                     text += f"{status} #{a['id']} {a['symbol']} {a['condition']} {a['price']}\n"
-                await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+                await safe_edit(text, kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "clearalerts":
             keyboard = [
                 [InlineKeyboardButton(get_text(lang, "confirm_yes"), callback_data="clearalerts_confirm")],
                 [InlineKeyboardButton(get_text(lang, "confirm_no"), callback_data="clearalerts_cancel")]
             ]
-            await query.message.reply_text(get_text(lang, "clearalerts_confirm"), reply_markup=InlineKeyboardMarkup(keyboard))
+            await safe_edit(get_text(lang, "clearalerts_confirm"), keyboard)
 
         elif cmd == "watchlist":
             wl = user_mgr.get_watchlist(user_id)
+            kb = [
+                [InlineKeyboardButton("➕ Ajouter", callback_data="cmd_addwatch"), InlineKeyboardButton("➖ Retirer", callback_data="cmd_removewatch")],
+                [InlineKeyboardButton("🔍 Scanner", callback_data="cmd_scan")],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_watchlist"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+            ]
             if not wl:
-                await query.message.reply_text(get_text(lang, "watchlist_empty"))
+                await safe_edit(get_text(lang, "watchlist_empty"), kb)
             else:
-                await query.message.reply_text(get_text(lang, "watchlist_show", symbols="\n".join(wl)), parse_mode=ParseMode.MARKDOWN)
+                await safe_edit(get_text(lang, "watchlist_show", symbols="\n".join(wl)), kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "addwatch":
             await symbol_selection(update, context, "addwatch")
@@ -355,8 +374,9 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif cmd == "scan":
             wl = user_mgr.get_watchlist(user_id)
+            kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_watchlist"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
             if not wl:
-                await query.message.reply_text(get_text(lang, "watchlist_scan_empty"))
+                await safe_edit(get_text(lang, "watchlist_scan_empty"), kb)
             else:
                 tf = user_mgr.get_setting(user_id, "timeframe", DEFAULT_TIMEFRAME)
                 style = user_mgr.get_setting(user_id, "trading_style", "day")
@@ -366,10 +386,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     df = await fetcher.get_historical_data(sym, timeframe=tf)
                     if df is not None and not df.empty:
                         res = engine.analyze(df, lang, symbol=sym, style=style)
-                        results.append(f"{sym}: {res['signal_text']} (Score: {res['teddy_score']})")
+                        results.append(f"• *{sym}*: {res['signal_text']} (Score: {res['teddy_score']})")
                     else:
-                        results.append(f"{sym}: {get_text(lang, 'data_unavailable')}")
-                await query.message.reply_text(get_text(lang, "watchlist_scan_result", results="\n".join(results)), parse_mode=ParseMode.MARKDOWN)
+                        results.append(f"• *{sym}*: {get_text(lang, 'data_unavailable')}")
+                await safe_edit(get_text(lang, "watchlist_scan_result", results="\n".join(results)), kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "settimeframe":
             kb = [
@@ -384,7 +404,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ],
                 [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
-            await query.message.reply_text(get_text(lang, "settimeframe_choose"), reply_markup=InlineKeyboardMarkup(kb))
+            await safe_edit(get_text(lang, "settimeframe_choose"), kb)
 
         elif cmd == "setstyle":
             kb = [
@@ -394,23 +414,24 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],
                 [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
-            await query.message.reply_text("Choose your trading style:", reply_markup=InlineKeyboardMarkup(kb))
+            await safe_edit("🎯 *Choisissez votre style de trading :*", kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "setlanguage":
             kb = [
                 [InlineKeyboardButton("FR", callback_data="cmd_setlanguage_fr"), InlineKeyboardButton("EN", callback_data="cmd_setlanguage_en")],
                 [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
-            await query.message.reply_text(get_text(lang, "setlanguage_choose"), reply_markup=InlineKeyboardMarkup(kb))
+            await safe_edit(get_text(lang, "setlanguage_choose"), kb)
 
         elif cmd == "delalert":
             alerts_list = alert_mgr.get_alerts(user_id)
             if not alerts_list:
-                await query.message.reply_text(get_text(lang, "alerts_empty"))
+                kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_alertes")]]
+                await safe_edit(get_text(lang, "alerts_empty"), kb)
             else:
                 kb = [[InlineKeyboardButton(f"#{a['id']} {a['symbol']} {a['condition']} {a['price']}", callback_data=f"cmd_delalert_{a['id']}")] for a in alerts_list]
                 kb.append([InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_alertes")])
-                await query.message.reply_text(get_text(lang, "delalert_pick"), reply_markup=InlineKeyboardMarkup(kb))
+                await safe_edit(get_text(lang, "delalert_pick"), kb)
 
         elif cmd == "alert":
             await symbol_selection(update, context, "alert")
@@ -422,9 +443,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = user_id
             lang2 = user_mgr.get_setting(uid, "lang", "en")
             tf = user_mgr.get_setting(uid, "timeframe", DEFAULT_TIMEFRAME)
-            role = user_mgr.get_role(uid)
-            prem = "✅" if role == "pro" else "❌"
-            await query.message.reply_text(get_text(lang2, "settings_info", tf=tf, lang_name=lang2.upper(), role=role.upper(), prem=prem), parse_mode=ParseMode.MARKDOWN)
+            style = user_mgr.get_setting(uid, "trading_style", "day")
+            await send_settings_menu(lang2, tf, style, uid, query.message.reply_text, edit_fn=safe_edit)
 
         elif cmd == "historique":
             kb = [
@@ -432,23 +452,33 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🗑️ " + get_text(lang, "clearhistory_btn"), callback_data="cmd_historique_clear")],
                 [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
-            await query.message.reply_text(get_text(lang, "history_menu_title"), reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+            await safe_edit(get_text(lang, "history_menu_title"), kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "historique_view":
-            await historique(update, context)
+            kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+            signals = history_mgr.get_user_signals(user_id, limit=10)
+            if not signals:
+                await safe_edit("Aucun signal dans votre historique.", kb)
+            else:
+                lines = ["📜 *10 Derniers Signaux :*\n"]
+                for s in signals:
+                    emoji = "🟢" if s.get("direction") == "BUY" else "🔴" if s.get("direction") == "SELL" else "⚪"
+                    lines.append(f"{emoji} *{s['symbol']}* ({s['direction']}) - Entry: {s.get('entry_price')} | Score: {s.get('score')}")
+                await safe_edit("\n".join(lines), kb, parse_mode=ParseMode.MARKDOWN)
 
         elif cmd == "historique_clear":
-            uid = update.effective_user.id
-            history_mgr.conn.execute("DELETE FROM signals WHERE user_id = %s", (uid,))
+            history_mgr.conn.execute("DELETE FROM signals WHERE user_id = %s", (user_id,))
             history_mgr.conn.commit()
-            await query.message.reply_text("🗑️ Your history has been cleared.")
+            kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+            await safe_edit("🗑️ Votre historique a été effacé.", kb)
 
         elif cmd == "usage":
             rem = user_mgr.get_remaining_requests(user_id)
+            kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
             if rem == -1:
-                await query.message.reply_text(get_text(lang, "usage_unlimited"))
+                await safe_edit(get_text(lang, "usage_unlimited"), kb)
             else:
-                await query.message.reply_text(get_text(lang, "usage_requests_remaining", rem=rem))
+                await safe_edit(get_text(lang, "usage_requests_remaining", rem=rem), kb)
 
         elif cmd == "paper_status":
             context.args = ["status"]
@@ -467,17 +497,21 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await paper(update, context)
 
         elif cmd == "support":
-            await query.message.reply_text(get_text(lang, "support"))
+            kb = [[InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+            await safe_edit(get_text(lang, "support"), kb)
 
         else:
-            await query.message.reply_text(get_text(lang, "unknown_command"))
+            kb = [[InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+            await safe_edit(get_text(lang, "unknown_command"), kb)
 
     # --- Callbacks hors cmd_ ---
     if data == "clearalerts_confirm":
         alert_mgr.clear_alerts(user_id)
-        await query.edit_message_text(get_text(lang, "alerts_cleared"))
+        kb = [[InlineKeyboardButton("⬅️ Alertes", callback_data="menu_alertes"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+        await safe_edit(get_text(lang, "alerts_cleared"), kb)
     elif data == "clearalerts_cancel":
-        await query.edit_message_text(get_text(lang, "action_cancelled"))
+        kb = [[InlineKeyboardButton("⬅️ Alertes", callback_data="menu_alertes"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]
+        await safe_edit(get_text(lang, "action_cancelled"), kb)
 
 # =========================================================
 # SYMBOL SELECTION
@@ -1064,6 +1098,81 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 @check_limit
+async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(update)
+    user_id = update.effective_user.id
+    wl = user_mgr.get_watchlist(user_id)
+    kb = [
+        [InlineKeyboardButton("➕ Ajouter", callback_data="cmd_addwatch"), InlineKeyboardButton("➖ Retirer", callback_data="cmd_removewatch")],
+        [InlineKeyboardButton("🔍 Scanner", callback_data="cmd_scan")],
+        [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_watchlist"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+    ]
+    markup = InlineKeyboardMarkup(kb)
+    if not wl:
+        text = get_text(lang, "watchlist_empty")
+    else:
+        text = get_text(lang, "watchlist_show", symbols="\n".join(wl))
+    await respond(update, text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+
+@check_limit
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(update)
+    user_id = update.effective_user.id
+    wl = user_mgr.get_watchlist(user_id)
+    kb = [
+        [InlineKeyboardButton("⬅️ Retour Watchlist", callback_data="menu_watchlist"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
+    ]
+    markup = InlineKeyboardMarkup(kb)
+    if not wl:
+        await respond(update, get_text(lang, "watchlist_scan_empty"), reply_markup=markup)
+        return
+
+    tf = user_mgr.get_setting(user_id, "timeframe", DEFAULT_TIMEFRAME)
+    style = user_mgr.get_setting(user_id, "trading_style", "day")
+    results = []
+    engine = SignalEngine()
+    for sym in wl:
+        df = await fetcher.get_historical_data(sym, timeframe=tf)
+        if df is not None and not df.empty:
+            res = engine.analyze(df, lang, symbol=sym, style=style)
+            results.append(f"• *{sym}*: {res['signal_text']} (Score: {res['teddy_score']})")
+        else:
+            results.append(f"• *{sym}*: {get_text(lang, 'data_unavailable')}")
+    text = get_text(lang, "watchlist_scan_result", results="\n".join(results))
+    await respond(update, text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+
+@check_limit
+async def clearalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(update)
+    kb = [
+        [InlineKeyboardButton(get_text(lang, "confirm_yes"), callback_data="clearalerts_confirm")],
+        [InlineKeyboardButton(get_text(lang, "confirm_no"), callback_data="clearalerts_cancel")]
+    ]
+    await respond(update, get_text(lang, "clearalerts_confirm"), reply_markup=InlineKeyboardMarkup(kb))
+
+@check_limit
+async def setstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(update)
+    user_id = update.effective_user.id
+    if context.args:
+        style = context.args[0].lower()
+        if style in ("scalping", "day", "swing", "position"):
+            user_mgr.set_setting(user_id, "trading_style", style)
+            if style == "scalping":
+                user_mgr.set_setting(user_id, "timeframe", "5m")
+            style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)", "scalping": "Scalping (5m)"}
+            await respond(update, f"✅ Style de trading mis à jour : *{style_names.get(style, style)}*", parse_mode=ParseMode.MARKDOWN)
+            return
+    kb = [
+        [InlineKeyboardButton("Scalping (5m)", callback_data="cmd_setstyle_scalping")],
+        [InlineKeyboardButton("📊 Day Trader (1h)", callback_data="cmd_setstyle_day")],
+        [InlineKeyboardButton("📈 Swing Trader (4h)", callback_data="cmd_setstyle_swing")],
+        [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],
+        [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
+    ]
+    await respond(update, "🎯 *Choisissez votre style de trading :*", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+
+@check_limit
 async def settimeframe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_pending_alert_input(update, context):
         return
@@ -1240,6 +1349,7 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── STATUS ───────────────────────────────────────────────────────────
     elif action == "status":
+        paper_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Retour Paper", callback_data="menu_paper"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]) if update.callback_query else None
         stats     = paper_trader.get_stats(user_id)
         positions = paper_trader.get_positions(user_id)
         msg = get_text(
@@ -1264,7 +1374,7 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg += "\n" + get_text(lang, "paper_no_open_positions")
 
-        await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
+        await respond(update, msg, reply_markup=paper_kb, parse_mode=ParseMode.MARKDOWN)
 
     # ── BUY / SHORT ──────────────────────────────────────────────────────
     elif action in ("buy", "short"):
@@ -1399,9 +1509,10 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── HISTORY ──────────────────────────────────────────────────────────
     elif action == "history":
+        paper_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Retour Paper", callback_data="menu_paper"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]) if update.callback_query else None
         closed = paper_trader.get_closed_positions(user_id)
         if not closed:
-            await respond(update, get_text(lang, "paper_history_empty"))
+            await respond(update, get_text(lang, "paper_history_empty"), reply_markup=paper_kb)
             return
         msg = get_text(lang, "paper_history_title")
         for p in closed[-10:]:
@@ -1422,10 +1533,11 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f" {entry_p:.4f}→{exit_p:.4f}"
                 f" [{reason}] PnL net: {pnl_sign}{pnl_net:.2f}${cap_str}"
             )
-        await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
+        await respond(update, msg, reply_markup=paper_kb, parse_mode=ParseMode.MARKDOWN)
 
     # ── STATS ─────────────────────────────────────────────────────────────
     elif action == "stats":
+        paper_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Retour Paper", callback_data="menu_paper"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]]) if update.callback_query else None
         stats = paper_trader.get_stats(user_id)
         await respond(
             update,
@@ -1438,7 +1550,9 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 wins=stats["wins"],
                 losses=stats["losses"],
                 win_rate=stats["win_rate"],
-            )
+            ),
+            reply_markup=paper_kb,
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     else:
