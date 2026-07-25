@@ -149,13 +149,18 @@ class HistoryManager:
 
     def get_recent_signals(self, limit: int = 10, user_id: int = None) -> List[Dict]:
         if user_id:
-            rows = self.conn.execute("SELECT * FROM signals WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit)).fetchall()
+            rows = self.conn.execute("SELECT * FROM signals WHERE user_id = %s AND direction <> %s ORDER BY created_at DESC LIMIT %s", (user_id, "WAIT", limit)).fetchall()
         else:
-            rows = self.conn.execute("SELECT * FROM signals ORDER BY created_at DESC LIMIT %s", (limit,)).fetchall()
+            rows = self.conn.execute("SELECT * FROM signals WHERE direction <> %s ORDER BY created_at DESC LIMIT %s", ("WAIT", limit)).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+
+    def get_user_signals(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """Retourne l'historique utilisateur sans inclure les signaux WAIT."""
+        return self.get_recent_signals(limit=limit, user_id=user_id)
+
     def get_signal_by_id(self, signal_id: str) -> Optional[Dict]:
-        row = self.conn.execute("SELECT * FROM signals WHERE id = %s", (signal_id,)).fetchone()
+        row = self.conn.execute("SELECT * FROM signals WHERE id = %s AND direction <> %s", (signal_id, "WAIT")).fetchone()
         return self._row_to_dict(row) if row else None
 
     # =========================================================

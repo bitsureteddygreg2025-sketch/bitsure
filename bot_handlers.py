@@ -311,6 +311,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_mgr.set_setting(update.effective_user.id, "trading_style", style)
             if style == "scalping":
                 user_mgr.set_setting(update.effective_user.id, "timeframe", "5m")
+            elif style == "scalping_15m":
+                user_mgr.set_setting(update.effective_user.id, "timeframe", "15m")
             tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
             await send_settings_menu(lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
@@ -409,6 +411,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif cmd == "setstyle":
             kb = [
                 [InlineKeyboardButton("Scalping (5m)", callback_data="cmd_setstyle_scalping")],
+                [InlineKeyboardButton("Scalping (15m)", callback_data="cmd_setstyle_scalping_15m")],
                 [InlineKeyboardButton("📊 Day Trader (1h)", callback_data="cmd_setstyle_day")],
                 [InlineKeyboardButton("📈 Swing Trader (4h)", callback_data="cmd_setstyle_swing")],
                 [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],
@@ -1053,8 +1056,9 @@ async def send_settings_menu(lang: str, tf: str, style: str, uid: int,
         "day":      "Day Trader",
         "swing":    "Swing Trader",
         "position": "Position Trader",
+        "scalping": "Scalping (5m)",
+        "scalping_15m": "Scalping (15m)",
     }
-    style_names.update({"scalping": "Scalping (5m)"})
     style_display = style_names.get(style, style)
 
     recap_lines = [
@@ -1156,15 +1160,18 @@ async def setstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if context.args:
         style = context.args[0].lower()
-        if style in ("scalping", "day", "swing", "position"):
+        if style in ("scalping", "scalping_15m", "day", "swing", "position"):
             user_mgr.set_setting(user_id, "trading_style", style)
             if style == "scalping":
                 user_mgr.set_setting(user_id, "timeframe", "5m")
-            style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)", "scalping": "Scalping (5m)"}
+            elif style == "scalping_15m":
+                user_mgr.set_setting(user_id, "timeframe", "15m")
+            style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)", "scalping": "Scalping (5m)", "scalping_15m": "Scalping (15m)"}
             await respond(update, f"✅ Style de trading mis à jour : *{style_names.get(style, style)}*", parse_mode=ParseMode.MARKDOWN)
             return
     kb = [
         [InlineKeyboardButton("Scalping (5m)", callback_data="cmd_setstyle_scalping")],
+        [InlineKeyboardButton("Scalping (15m)", callback_data="cmd_setstyle_scalping_15m")],
         [InlineKeyboardButton("📊 Day Trader (1h)", callback_data="cmd_setstyle_day")],
         [InlineKeyboardButton("📈 Swing Trader (4h)", callback_data="cmd_setstyle_swing")],
         [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],

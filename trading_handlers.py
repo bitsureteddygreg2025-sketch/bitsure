@@ -412,10 +412,11 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("1h", callback_data="set_analysis_tf_1h"),
             ],
             [
-                InlineKeyboardButton("Scalping", callback_data="set_analysis_style_scalping"),
-                InlineKeyboardButton("Day", callback_data="set_analysis_style_day"),
+                InlineKeyboardButton("Scalping 5m", callback_data="set_analysis_style_scalping"),
+                InlineKeyboardButton("Scalping 15m", callback_data="set_analysis_style_scalping_15m"),
             ],
             [
+                InlineKeyboardButton("Day", callback_data="set_analysis_style_day"),
                 InlineKeyboardButton("Swing", callback_data="set_analysis_style_swing"),
                 InlineKeyboardButton("Position", callback_data="set_analysis_style_position"),
             ],
@@ -462,12 +463,14 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data.startswith("set_analysis_style_"):
         style = data.replace("set_analysis_style_", "")
-        if style not in ("scalping", "day", "swing", "position"):
+        if style not in ("scalping", "scalping_15m", "day", "swing", "position"):
             await query.edit_message_text("Style de trading invalide.")
             return
         fields = {"trading_style": style}
         if style == "scalping":
             fields["analysis_timeframe"] = "5m"
+        elif style == "scalping_15m":
+            fields["analysis_timeframe"] = "15m"
         update_config(user_id, **fields)
         query.data = "menu_analysis_config"
         await trading_callback_router(update, context)
