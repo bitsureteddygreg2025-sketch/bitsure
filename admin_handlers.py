@@ -201,21 +201,9 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(get_text(lang, "confirm_payment_missing", user_id=uid))
 
 # =========================================================
-# REFRESH HISTORY
-# =========================================================
-
-@check_limit
-# =========================================================
-# EXPORT SIGNALS
-# =========================================================
-
-@check_limit
-# =========================================================
-# =========================================================
 # CLEAN WAIT SIGNALS
 # =========================================================
 
-@check_limit
 async def cleanwaits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return

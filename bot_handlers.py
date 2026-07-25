@@ -273,6 +273,18 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         style = user_mgr.get_setting(uid, "trading_style", "day")
         await send_settings_menu(lang, tf, style, uid, query.message.reply_text, edit_fn=safe_edit)
 
+    elif data == "menu_back":
+        keyboard = [
+            [InlineKeyboardButton(get_text(lang, "menu_analyse"), callback_data="menu_analyse")],
+            [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
+            [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
+            [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
+            [InlineKeyboardButton("💼 Mon Compte (Solde & PnL)", callback_data="menu_account")],
+            [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
+            [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
+        ]
+        await safe_edit(get_text(lang, "menu_title"), keyboard, parse_mode=ParseMode.MARKDOWN)
+
     elif data.startswith("cmd_"):
         cmd = data[4:]
         if cmd.startswith("alertcond_"):
@@ -335,6 +347,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await query.message.reply_text(get_text(lang, "watchlist_show", symbols="\n".join(wl)), parse_mode=ParseMode.MARKDOWN)
 
+        elif cmd == "addwatch":
+            await symbol_selection(update, context, "addwatch")
+
+        elif cmd == "removewatch":
+            await symbol_selection(update, context, "removewatch")
+
         elif cmd == "scan":
             wl = user_mgr.get_watchlist(user_id)
             if not wl:
@@ -364,6 +382,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("4h", callback_data="cmd_settimeframe_4h"),
                     InlineKeyboardButton("1d", callback_data="cmd_settimeframe_1d"),
                 ],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
             await query.message.reply_text(get_text(lang, "settimeframe_choose"), reply_markup=InlineKeyboardMarkup(kb))
 
@@ -373,11 +392,15 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📊 Day Trader (1h)", callback_data="cmd_setstyle_day")],
                 [InlineKeyboardButton("📈 Swing Trader (4h)", callback_data="cmd_setstyle_swing")],
                 [InlineKeyboardButton("🏦 Position Trader (1d)", callback_data="cmd_setstyle_position")],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
             await query.message.reply_text("Choose your trading style:", reply_markup=InlineKeyboardMarkup(kb))
 
         elif cmd == "setlanguage":
-            kb = [[InlineKeyboardButton("FR", callback_data="cmd_setlanguage_fr"), InlineKeyboardButton("EN", callback_data="cmd_setlanguage_en")]]
+            kb = [
+                [InlineKeyboardButton("FR", callback_data="cmd_setlanguage_fr"), InlineKeyboardButton("EN", callback_data="cmd_setlanguage_en")],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
+            ]
             await query.message.reply_text(get_text(lang, "setlanguage_choose"), reply_markup=InlineKeyboardMarkup(kb))
 
         elif cmd == "delalert":
@@ -386,7 +409,14 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(get_text(lang, "alerts_empty"))
             else:
                 kb = [[InlineKeyboardButton(f"#{a['id']} {a['symbol']} {a['condition']} {a['price']}", callback_data=f"cmd_delalert_{a['id']}")] for a in alerts_list]
+                kb.append([InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_alertes")])
                 await query.message.reply_text(get_text(lang, "delalert_pick"), reply_markup=InlineKeyboardMarkup(kb))
+
+        elif cmd == "alert":
+            await symbol_selection(update, context, "alert")
+
+        elif cmd == "paper":
+            await symbol_selection(update, context, "paper")
 
         elif cmd == "settings":
             uid = user_id
@@ -400,6 +430,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = [
                 [InlineKeyboardButton(get_text(lang, "btn_historique"), callback_data="cmd_historique_view")],
                 [InlineKeyboardButton("🗑️ " + get_text(lang, "clearhistory_btn"), callback_data="cmd_historique_clear")],
+                [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_parametres")]
             ]
             await query.message.reply_text(get_text(lang, "history_menu_title"), reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
@@ -599,16 +630,22 @@ async def terms_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @check_limit
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
+    user_id = update.effective_user.id
     trial_msg = ""
-    if user_mgr.get_role(update.effective_user.id) == "free" and user_mgr.is_trial_valid(update.effective_user.id):
+    if user_mgr.get_role(user_id) == "free" and user_mgr.is_trial_valid(user_id):
         from config import TRIAL_DAYS
-        user_id = update.effective_user.id
         user = user_mgr.get_user(user_id)
         trial_start = user.get("joined", time.time())
         trial_end = trial_start + (TRIAL_DAYS * 24 * 3600)
         trial_days = max(0, int((trial_end - time.time()) / 86400))
-        trial_msg = "\n" + get_text(lang, "trial_days_left", days=trial_days)
-    await update.message.reply_text(get_text(lang, "help_redirect") + trial_msg, parse_mode=ParseMode.MARKDOWN)
+        trial_msg = "\n\n" + get_text(lang, "trial_days_left", days=trial_days)
+    
+    help_text = get_text(lang, "help_full")
+    if user_mgr.is_admin(user_id):
+        help_text += get_text(lang, "help_admin")
+    
+    full_msg = help_text + trial_msg
+    await update.message.reply_text(full_msg, parse_mode=ParseMode.MARKDOWN)
 
 @check_limit
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
