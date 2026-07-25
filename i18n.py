@@ -76,6 +76,13 @@ TEXTS = {
             "/blacklist SYMBOLE – Exclure un symbole\n"
             "/emergency_stop – Arrêt d'urgence et fermeture de toutes les positions\n\n"
 
+            "🚨 *Live Trading*\n"
+            "/live – Menu Live Trading réel\n"
+            "/live_long SYMBOLE MONTANT SL TP [LEVIER] – Préparer un LONG réel\n"
+            "/live_short SYMBOLE MONTANT SL TP [LEVIER] – Préparer un SHORT réel\n"
+            "/live_close ID – Fermer une position réelle suivie\n"
+            "/live_cancel SYMBOLE ORDER_ID – Annuler un ordre ouvert\n\n"
+
             "⚙️ *Paramètres & Compte*\n"
             "/settings – Afficher vos paramètres actuels\n"
             "/settimeframe TF – Définir l'unité de temps (5m, 15m, 1h, 4h, 1d)\n"
@@ -484,6 +491,13 @@ TEXTS = {
             "/whitelist SYMBOL – Add whitelisted symbol\n"
             "/blacklist SYMBOL – Blacklist a symbol\n"
             "/emergency_stop – Emergency stop & close all positions\n\n"
+
+            "🚨 *Live Trading*\n"
+            "/live – Real Live Trading menu\n"
+            "/live_long SYMBOL AMOUNT SL TP [LEVERAGE] – Prepare a real LONG\n"
+            "/live_short SYMBOL AMOUNT SL TP [LEVERAGE] – Prepare a real SHORT\n"
+            "/live_close ID – Close a tracked real position\n"
+            "/live_cancel SYMBOL ORDER_ID – Cancel an open order\n\n"
 
             "⚙️ *Settings & Account*\n"
             "/settings – View current settings\n"
