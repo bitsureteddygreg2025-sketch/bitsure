@@ -1,4 +1,4 @@
-﻿"""
+"""
 paper_trader.py — Module de paper trading realiste pour Bitsure Teddy.
 
 Fonctionnalites :
@@ -236,6 +236,27 @@ class PaperTrader:
             self.positions.setdefault(uid, [])
             self.closed_positions.setdefault(uid, [])
             self._save_capital(uid)
+
+    def reset_account(self, user_id, amount: float = 10000.0) -> float:
+        """Réinitialise totalement le compte Paper Trading de l'utilisateur."""
+        uid = self._uid(user_id)
+        self.capitals[uid] = amount
+        self.positions[uid] = []
+        self.closed_positions[uid] = []
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM paper_positions WHERE user_id = %s", (int(uid),))
+                cur.execute("DELETE FROM paper_capitals WHERE user_id = %s", (int(uid),))
+                cur.execute("INSERT INTO paper_capitals (user_id, capital) VALUES (%s, %s)", (int(uid), amount))
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"[PaperTrader.reset_account] Erreur: {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+        return amount
 
     def get_capital(self, user_id) -> float:
         return self.capitals.get(self._uid(user_id), PAPER_DEFAULT_CAPITAL)

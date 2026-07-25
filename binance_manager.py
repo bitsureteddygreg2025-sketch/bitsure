@@ -168,6 +168,12 @@ def open_position(
     """
     client = _client_for_user(user_id)
 
+    # Regles Spot vs Futures
+    if market_type == "spot":
+        leverage = 1
+        if direction == "SELL":
+            raise BinanceClientError("Vente à découvert (SHORT) non supportée en mode Spot standard.")
+
     try:
         filters = get_symbol_filters(client, symbol, market_type)
         step_size = filters.get("LOT_SIZE", {}).get("stepSize") or filters.get(
@@ -211,9 +217,6 @@ def open_position(
             )
             result["order_id"] = order["orderId"]
             result["client_order_id"] = order.get("clientOrderId")
-
-            # En spot, SL/TP sont simulés côté bot (voir position_manager.py),
-            # car Binance spot ne supporte pas nativement OCO sur toutes les paires testnet.
             result["sl_order_id"] = None
             result["tp_order_id"] = None
 
@@ -272,3 +275,126 @@ def test_connection(user_id: int) -> bool:
     except BinanceAPIException as e:
         mark_credentials_invalid(user_id, str(e))
         raise BinanceClientError(f"Connexion Binance échouée : {e.message}")
+
+
+def get_full_account_info(user_id: int, market_type: MarketType = "futures") -> dict:
+    """
+    Récupère toutes les informations du compte Binance :
+    - Solde total (USDT + actifs)
+    - Détail des actifs
+    - Positions ouvertes + PnL non réalisé
+    - Taux d'utilisation de la marge (Futures)
+    - Historique des ordres récents et commissions
+    """
+    client = _client_for_user(user_id)
+    summary = {
+        "market_type": market_type,
+        "total_wallet_balance": 0.0,
+        "available_balance": 0.0,
+        "unrealized_pnl": 0.0,
+        "margin_used_pct": 0.0,
+        "assets": [],
+        "positions": [],
+        "recent_trades": [],
+        "total_commissions": 0.0,
+    }
+
+    try:
+        if market_type == "futures":
+            acc = client.futures_account()
+            summary["total_wallet_balance"] = float(acc.get("totalWalletBalance", 0.0))
+            summary["available_balance"] = float(acc.get("availableBalance", 0.0))
+            summary["unrealized_pnl"] = float(acc.get("totalUnrealizedProfit", 0.0))
+
+            total_maint_margin = float(acc.get("totalMaintMargin", 0.0))
+            total_margin_balance = float(acc.get("totalMarginBalance", 1.0))
+            if total_margin_balance > 0:
+                summary["margin_used_pct"] = round((total_maint_margin / total_margin_balance) * 100, 2)
+
+            for b in acc.get("assets", []):
+                bal = float(b.get("walletBalance", 0.0))
+                if bal > 0:
+                    summary["assets"].append({
+                        "asset": b["asset"],
+                        "wallet": bal,
+                        "available": float(b.get("availableBalance", 0.0)),
+                        "unrealized_pnl": float(b.get("unrealizedProfit", 0.0)),
+                    })
+
+            raw_positions = client.futures_position_information()
+            for pos in raw_positions:
+                amt = float(pos.get("positionAmt", 0.0))
+                if amt != 0:
+                    entry = float(pos.get("entryPrice", 0.0))
+                    mark = float(pos.get("markPrice", 0.0))
+                    upnl = float(pos.get("unRealizedProfit", 0.0))
+                    side = "BUY (LONG)" if amt > 0 else "SELL (SHORT)"
+                    summary["positions"].append({
+                        "symbol": pos["symbol"],
+                        "side": side,
+                        "quantity": abs(amt),
+                        "entry_price": entry,
+                        "mark_price": mark,
+                        "unrealized_pnl": upnl,
+                        "leverage": int(pos.get("leverage", 1)),
+                        "liquidation_price": float(pos.get("liquidationPrice", 0.0)),
+                    })
+
+            # Historique des trades & commissions récents
+            try:
+                user_trades = client.futures_account_trades(limit=10)
+                for t in user_trades:
+                    comm = float(t.get("commission", 0.0))
+                    summary["total_commissions"] += comm
+                    summary["recent_trades"].append({
+                        "symbol": t["symbol"],
+                        "side": t["side"],
+                        "price": float(t["price"]),
+                        "qty": float(t["qty"]),
+                        "commission": comm,
+                        "commission_asset": t["commissionAsset"],
+                        "time": t["time"],
+                    })
+            except Exception:
+                pass
+
+        else:  # Spot
+            acc = client.get_account()
+            balances = acc.get("balances", [])
+            total_usdt = 0.0
+
+            for b in balances:
+                free = float(b.get("free", 0.0))
+                locked = float(b.get("locked", 0.0))
+                total = free + locked
+                if total > 0:
+                    asset = b["asset"]
+                    usdt_val = total
+                    if asset != "USDT":
+                        try:
+                            price = float(client.get_symbol_ticker(symbol=f"{asset}USDT")["price"])
+                            usdt_val = total * price
+                        except Exception:
+                            usdt_val = 0.0
+                    total_usdt += usdt_val
+                    summary["assets"].append({
+                        "asset": asset,
+                        "free": free,
+                        "locked": locked,
+                        "total": total,
+                        "usdt_value": round(usdt_val, 2),
+                    })
+
+            summary["total_wallet_balance"] = round(total_usdt, 2)
+            try:
+                summary["available_balance"] = float(client.get_asset_balance(asset="USDT")["free"]) if client.get_asset_balance(asset="USDT") else 0.0
+            except Exception:
+                summary["available_balance"] = summary["total_wallet_balance"]
+
+    except BinanceAPIException as e:
+        if getattr(e, "code", None) in (-2015, -2014):
+            mark_credentials_invalid(user_id, str(e))
+        raise BinanceClientError(f"Erreur API Binance Account: {e.message}")
+
+    return summary
+

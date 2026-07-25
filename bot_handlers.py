@@ -119,6 +119,127 @@ def check_limit(func):
                 await update.message.reply_text(get_text(lang, "limit_reached"))
                 return
         if not user_mgr.is_admin(user_id):
+import asyncio
+import logging
+from datetime import datetime
+import matplotlib.pyplot as plt
+import io
+import pandas as pd
+import random
+import hashlib
+import time
+import os
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+from config import (
+    ADMIN_ID, DEFAULT_TIMEFRAME, SYMBOL_CONFIGS, ATR_MULTIPLIER_SL, RR_RATIO_TARGET,
+    PAPER_DEFAULT_LEVERAGE, PAPER_MAX_LEVERAGE, PAPER_FEES_PCT, PAPER_SLIPPAGE_PCT,
+)
+from data_fetcher import DataFetcher
+from signal_engine import SignalEngine
+from indicators import atr
+from user_manager import UserManager
+from alert_manager import AlertManager
+from history_manager import HistoryManager
+from utils import format_number, is_valid_symbol, normalize_symbol
+from i18n import get_text
+from payments import generate_binance_payment
+from paper_trader import PaperTrader
+
+logger = logging.getLogger(__name__)
+fetcher = DataFetcher.get_instance()
+user_mgr = UserManager.get_instance()
+alert_mgr = AlertManager.get_instance()
+history_mgr = HistoryManager.get_instance()
+weekly_scheduler = None
+paper_trader = PaperTrader()
+
+SYMBOLS_12 = [
+    "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY",
+    "AUDUSD", "XAUUSD", "AAPL", "TSLA", "NVDA"
+]
+
+def generate_signal_id():
+    raw = f"{time.time()}-{random.random()}"
+    return hashlib.md5(raw.encode()).hexdigest()[:6].upper()
+
+def get_user_lang(update: Update) -> str:
+    user_id = update.effective_user.id
+    return user_mgr.get_setting(user_id, "lang", "en")
+
+async def respond(update: Update, text: str, **kwargs):
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, **kwargs)
+        except:
+            await update.callback_query.message.reply_text(text, **kwargs)
+    else:
+        await update.message.reply_text(text, **kwargs)
+
+# =========================================================
+# ALERT INPUT HANDLER
+# =========================================================
+
+async def handle_pending_alert_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not update.message or not update.message.text:
+        return False
+    pending_symbol = context.user_data.get("pending_alert_symbol")
+    pending_cond = context.user_data.get("pending_alert_cond")
+    if not pending_symbol or not pending_cond:
+        return False
+    lang = get_user_lang(update)
+    try:
+        price = float(update.message.text.strip())
+        if price <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(get_text(lang, "alert_price_invalid_retry"))
+        return True
+    symbol = normalize_symbol(pending_symbol)
+    cond_label = get_text(lang, "cond_above") if pending_cond == "above" else get_text(lang, "cond_below")
+    ok, result = alert_mgr.add_alert(update.effective_user.id, symbol, pending_cond, price)
+    if not ok:
+        await update.message.reply_text(f"❌ Limite atteinte ({result} alertes max)")
+        return True
+    await update.message.reply_text(get_text(lang, "alert_created", id=result, symbol=symbol, cond=cond_label, price=price))
+    context.user_data.pop("pending_alert_symbol", None)
+    context.user_data.pop("pending_alert_cond", None)
+    return True
+
+# =========================================================
+# LIMIT CHECK
+# =========================================================
+
+def check_limit(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        lang = get_user_lang(update)
+        import logging
+        logging.getLogger(__name__).warning(f"[check_limit] func={func.__name__}, user={user_id}")
+        if not user_mgr.can_access_bot(user_id):
+            if update.callback_query:
+                await update.callback_query.answer("🚧 Access by invitation only. Contact @btsr_teddy09", show_alert=True)
+                return
+            else:
+                await update.message.reply_text("🚧 Access by invitation only.\n\nContact @btsr_teddy09 to get an invitation.")
+                return
+        if func.__name__ != "start" and not user_mgr.has_accepted_terms(user_id) and not user_mgr.is_admin(user_id):
+            if update.callback_query:
+                await update.callback_query.answer(get_text(lang, "terms_must_accept"), show_alert=True)
+                return
+            else:
+                await update.message.reply_text(get_text(lang, "terms_must_accept"))
+                return
+        if not user_mgr.check_limit(user_id):
+            if update.callback_query:
+                await update.callback_query.answer(get_text(lang, "limit_reached"), show_alert=True)
+                return
+            else:
+                await update.message.reply_text(get_text(lang, "limit_reached"))
+                return
+        if not user_mgr.is_admin(user_id):
             user_mgr.increment_usage(user_id)
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -150,10 +271,8 @@ async def notify_admin_new_premium(context: ContextTypes.DEFAULT_TYPE, user, rol
         logger.warning(f"Impossible de notifier l'admin : {e}")
 
 # =========================================================
-# START
+# START & HELP
 # =========================================================
-
-@check_limit
 
 @check_limit
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,6 +294,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
         [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
         [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
+        [InlineKeyboardButton("💼 Mon Compte (Solde & PnL)", callback_data="menu_account")],
         [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
         [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
     ]
@@ -214,6 +334,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await paper(update, context)
         return
 
+    # --- Account callback ---
+    if data == "menu_account":
+        from trading_handlers import cmd_account
+        await cmd_account(update, context)
+        return
+
     # --- Sous-menus ---
     if data == "menu_analyse":
         keyboard = [
@@ -222,6 +348,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_trend"), callback_data="cmd_trend")],
             [InlineKeyboardButton(get_text(lang, "btn_volatility"), callback_data="cmd_volatility")],
             [InlineKeyboardButton(get_text(lang, "btn_levels"), callback_data="cmd_levels")],
+            [InlineKeyboardButton("🔄 Configuration Analyse Périodique", callback_data="menu_analysis_config")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
         await safe_edit(
@@ -235,6 +362,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_text(lang, "btn_paper_status"), callback_data="cmd_paper_status")],
             [InlineKeyboardButton(get_text(lang, "btn_paper_history"), callback_data="cmd_paper_history")],
             [InlineKeyboardButton(get_text(lang, "btn_paper_stats"), callback_data="cmd_paper_stats")],
+            [InlineKeyboardButton("🔄 Réinitialiser Compte Paper", callback_data="cmd_paper_reset")],
             [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")]
         ]
         await safe_edit(
@@ -276,38 +404,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         style_names = {"day": "Day Trader", "swing": "Swing Trader", "position": "Position Trader"}
         style_names.update({"scalping": "Scalping (5m)"})
         style_display = style_names.get(style, style)
-        # Build recap as plain text to avoid Markdown entity errors from i18n strings
-        recap = (
-            "⚙️ Settings\n"
-            f"Timeframe : {tf}\n"
-            f"Style : {style_display}\n"
-            f"Language : {lang.upper()}\n\n"
-            "Use the buttons below to change your settings."
-        )
-        keyboard = [
-            [InlineKeyboardButton(get_text(lang, "btn_settimeframe"), callback_data="cmd_settimeframe")],
-            [InlineKeyboardButton(get_text(lang, "btn_setlanguage"),  callback_data="cmd_setlanguage")],
-            [InlineKeyboardButton("🎯 Trading Style", callback_data="cmd_setstyle")],
-            [InlineKeyboardButton(get_text(lang, "btn_historique"), callback_data="cmd_historique")],
-            [InlineKeyboardButton(get_text(lang, "btn_support"), callback_data="cmd_support")],
-            [InlineKeyboardButton(get_text(lang, "back"), callback_data="menu_back")],
-        ]
-        await safe_edit(recap, keyboard)  # plain text, no parse_mode
-    elif data == "menu_back":
-        keyboard = [
-            [InlineKeyboardButton(get_text(lang, "menu_analyse"), callback_data="menu_analyse")],
-            [InlineKeyboardButton(get_text(lang, "menu_alertes"), callback_data="menu_alertes")],
-            [InlineKeyboardButton(get_text(lang, "menu_watchlist"), callback_data="menu_watchlist")],
-            [InlineKeyboardButton(get_text(lang, "menu_paper"), callback_data="menu_paper")],
-            [InlineKeyboardButton("🤖 AutoTrade Binance", callback_data="menu_autotrade")],
-            [InlineKeyboardButton(get_text(lang, "menu_parametres"), callback_data="menu_parametres")],
-        ]
-        await safe_edit(get_text(lang, "menu_title"), keyboard)
-
-    # --- Command execution ---
-    if data.startswith("cmd_"):
-        cmd = data.replace("cmd_", "")
-
         if cmd.startswith("alertcond_"):
             _, symbol, cond = cmd.split("_")
             context.user_data["pending_alert_symbol"] = symbol
@@ -464,6 +560,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.args = ["stats"]
             await paper(update, context)
 
+        elif cmd == "paper_reset":
+            context.args = ["reset"]
+            await paper(update, context)
+
         elif cmd == "support":
             await query.message.reply_text(get_text(lang, "support"))
 
@@ -554,8 +654,6 @@ async def symbol_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif data == "noop":
         return
-
-# ---------- START ----------
 @check_limit
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1055,7 +1153,46 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         style=style,
         uid=uid,
         send_fn=update.message.reply_text,
+
+    recap_lines = [
+        f"*{get_text(lang, 'settings_title')}*",
+        f"{get_text(lang, 'settings_timeframe')} : `{tf}`",
+        f"{get_text(lang, 'settings_style')} : {style_display}",
+        f"{get_text(lang, 'settings_lang')} : {lang.upper()}",
+        "",
+        get_text(lang, "settings_edit"),
+    ]
+    recap = "\n".join(recap_lines)
+
+    keyboard = [
+        [InlineKeyboardButton(get_text(lang, "btn_settimeframe"), callback_data="cmd_settimeframe")],
+        [InlineKeyboardButton(get_text(lang, "btn_setlanguage"),  callback_data="cmd_setlanguage")],
+        [InlineKeyboardButton("🎯 Trading Style",                  callback_data="cmd_setstyle")],
+        [InlineKeyboardButton(get_text(lang, "btn_historique"),   callback_data="cmd_historique")],
+        [InlineKeyboardButton(get_text(lang, "btn_support"),      callback_data="cmd_support")],
+        [InlineKeyboardButton(get_text(lang, "back"),             callback_data="menu_back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if edit_fn is not None:
+        await edit_fn(recap, keyboard)
+    else:
+        await send_fn(recap, reply_markup=reply_markup)
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    lang = user_mgr.get_setting(uid, "lang", "en")
+    tf   = user_mgr.get_setting(uid, "timeframe", DEFAULT_TIMEFRAME)
+    style = user_mgr.get_setting(uid, "trading_style", "day")
+
+    await send_settings_menu(
+        lang=lang,
+        tf=tf,
+        style=style,
+        uid=uid,
+        send_fn=update.message.reply_text,
     )
+
 @check_limit
 async def settimeframe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_pending_alert_input(update, context):
@@ -1183,6 +1320,7 @@ async def historique(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(text) > 4000:
         text = text[:3997] + "…"
     await target_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
 # =========================================================
 # PAPER TRADING
 # =========================================================
@@ -1194,6 +1332,7 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     Usage :
       /paper start                     — initialise le compte (10 000 USDT)
+      /paper reset                     — réinitialise le compte
       /paper buy SYMBOL [leverage]     — ouvre une position LONG
       /paper short SYMBOL [leverage]   — ouvre une position SHORT
       /paper close SYMBOL              — ferme toutes les positions sur SYMBOL
@@ -1217,6 +1356,17 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         paper_trader.init_capital(user_id)
         capital = paper_trader.get_capital(user_id)
         await respond(update, get_text(lang, "paper_started", capital=capital))
+
+    # ── RESET ────────────────────────────────────────────────────────────
+    elif action == "reset":
+        new_cap = paper_trader.reset_account(user_id)
+        await respond(
+            update,
+            f"🔄 *Compte Paper Trading réinitialisé !*\n\n"
+            f"💰 Capital réinitialisé à : *{new_cap:.2f} USDT*\n"
+            f"🗑️ Toutes les positions ouvertes et l'historique ont été effacés.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
     # ── STATUS ───────────────────────────────────────────────────────────
     elif action == "status":
@@ -1243,100 +1393,6 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         else:
             msg += "\n" + get_text(lang, "paper_no_open_positions")
-        await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
-
-    # ── BUY (LONG) ───────────────────────────────────────────────────────
-    elif action in ("buy", "long"):
-        if len(context.args) < 2:
-            await respond(update, get_text(lang, "paper_buy_usage"))
-            return
-        symbol = normalize_symbol(context.args[1].upper())
-
-        # Levier optionnel en 3e argument
-        leverage = PAPER_DEFAULT_LEVERAGE
-        if len(context.args) >= 3:
-            try:
-                leverage = float(context.args[2])
-            except ValueError:
-                await respond(update, "❌ Levier invalide. Exemple : /paper buy BTCUSD 2")
-                return
-
-        df = await fetcher.get_historical_data(symbol)
-        if df is None or df.empty:
-            await respond(update, get_text(lang, "data_unavailable"))
-            return
-
-        trading_style = user_mgr.get_setting(user_id, "trading_style", "day")
-        result  = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
-        price   = float(result["indicators"]["price"])
-        atr_val = float(result["indicators"].get("atr", price * 0.01))
-        sl      = result.get("sl") if result.get("signal") == "BUY" and result.get("sl") else price - ATR_MULTIPLIER_SL * atr_val
-        tp      = result.get("tp") if result.get("signal") == "BUY" and result.get("tp") else price + RR_RATIO_TARGET * atr_val
-
-        capital = paper_trader.get_capital(user_id)
-        # Quantite = margin disponible * levier / prix (on engage 10% du capital par defaut)
-        sizing, sizing_err = RiskManager.calculate_position_size(
-            capital=capital,
-            entry_price=price,
-            sl=sl,
-            leverage=leverage,
-            risk_percentage=0.01,
-        )
-        qty = sizing.qty if sizing is not None else 0
-        if qty <= 0:
-            await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
-            return
-
-        pos, err = paper_trader.open_position(
-            user_id, symbol, price, sl, tp, qty,
-            side="BUY", leverage=leverage,
-        )
-        if err:
-            await respond(update, f"❌ {err}")
-            return
-
-        lev_str = f" (x{leverage:.0f})"
-        new_capital = paper_trader.get_capital(user_id)
-        fees_str = f"{pos.get('fees_total', 0):.4f}"
-        await respond(
-            update,
-            get_text(lang, "paper_opened",
-                     symbol=symbol,
-                     price=round(pos["entry_price"], 4),
-                     sl=round(sl, 4),
-                     tp=round(tp, 4))
-            + f"\n📐 Sens : BUY{lev_str} | Qty : {qty:.6f}"
-            + f"\n💸 Frais entrée : {fees_str} USDT"
-            + f"\n💰 Capital restant : {new_capital:.2f} USDT",
-        )
-
-    # ── SHORT (SELL) ──────────────────────────────────────────────────────
-    elif action in ("short", "sell_short"):
-        if len(context.args) < 2:
-            await respond(update, "❌ Usage : /paper short SYMBOL [leverage]")
-            return
-        symbol = normalize_symbol(context.args[1].upper())
-
-        leverage = PAPER_DEFAULT_LEVERAGE
-        if len(context.args) >= 3:
-            try:
-                leverage = float(context.args[2])
-            except ValueError:
-                await respond(update, "❌ Levier invalide. Exemple : /paper short BTCUSD 2")
-                return
-
-        df = await fetcher.get_historical_data(symbol)
-        if df is None or df.empty:
-            await respond(update, get_text(lang, "data_unavailable"))
-            return
-
-        trading_style = user_mgr.get_setting(user_id, "trading_style", "day")
-        result  = SignalEngine.analyze(df, lang, symbol=symbol, style=trading_style)
-        price   = float(result["indicators"]["price"])
-        atr_val = float(result["indicators"].get("atr", price * 0.01))
-        # Pour un SHORT : SL au-dessus, TP en-dessous
-        sl = result.get("sl") if result.get("signal") == "SELL" and result.get("sl") else price + ATR_MULTIPLIER_SL * atr_val
-        tp = result.get("tp") if result.get("signal") == "SELL" and result.get("tp") else price - RR_RATIO_TARGET * atr_val
 
         capital    = paper_trader.get_capital(user_id)
         sizing, sizing_err = RiskManager.calculate_position_size(

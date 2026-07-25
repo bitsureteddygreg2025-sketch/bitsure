@@ -247,6 +247,7 @@ def _ensure_schema(conn):
             dca_step_pct DOUBLE PRECISION DEFAULT 2.0,
             symbol_whitelist TEXT DEFAULT '',
             symbol_blacklist TEXT DEFAULT '',
+            periodic_analysis_enabled BOOLEAN DEFAULT FALSE,
             market_type TEXT DEFAULT 'futures',
             trading_style TEXT DEFAULT 'day',
             analysis_timeframe TEXT DEFAULT '1h',
@@ -258,6 +259,7 @@ def _ensure_schema(conn):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS periodic_analysis_enabled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS trading_style TEXT DEFAULT 'day'",
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_timeframe TEXT DEFAULT '1h'",
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_interval_minutes INT DEFAULT 5",

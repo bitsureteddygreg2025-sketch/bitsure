@@ -234,7 +234,7 @@ def _get_auto_trade_user_ids(interval_minutes: int) -> list[int]:
                 """
                 SELECT user_id
                 FROM trading_config
-                WHERE auto_trade = TRUE
+                WHERE (auto_trade = TRUE OR periodic_analysis_enabled = TRUE)
                   AND analysis_interval_minutes = %s
                 """,
                 (interval_minutes,),
@@ -276,10 +276,17 @@ def _format_market_scan_report(
 async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval_minutes: int):
     """
     Analyse tous les symboles tradables Binance pour les utilisateurs AutoTrade
-    configurés sur l'intervalle demandé. Les WAIT ne sont jamais persistés.
+    et Analyse Périodique configurés sur l'intervalle demandé.
+    Affiche les résultats détaillés dans le terminal et envoie le rapport Telegram.
     """
     history_mgr = HistoryManager.get_instance()
-    for user_id in _get_auto_trade_user_ids(interval_minutes):
+    user_ids = _get_auto_trade_user_ids(interval_minutes)
+    if not user_ids:
+        return
+
+    logger.info(f"=== [ ANALYSE PERIODIQUE ({interval_minutes}m) ] === Démarrage pour {len(user_ids)} utilisateur(s)")
+
+    for user_id in user_ids:
         config = get_config(user_id)
         try:
             symbols = get_tradable_symbols(config.market_type)
@@ -315,7 +322,17 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                     symbol=symbol,
                     style=config.trading_style,
                 )
-                if result.get("signal") not in ("BUY", "SELL"):
+
+                price = float(result["indicators"]["price"])
+                rsi = result["indicators"].get("rsi", "N/A")
+                macd = result["indicators"].get("macd", "N/A")
+                score = result.get("teddy_score", 0)
+                sig = result.get("signal", "WAIT")
+
+                # Affichage dans le terminal
+                logger.info(f"[{symbol}] Prix: {price:.4f} | RSI: {rsi} | MACD: {macd} | Score: {score} | Signal: {sig}")
+
+                if sig not in ("BUY", "SELL"):
                     continue
 
                 risk_check = check_can_open_position(user_id, config, symbol)
@@ -325,11 +342,11 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
 
                 signal_id = history_mgr.add_signal(
                     symbol=symbol,
-                    direction=result["signal"],
-                    price=float(result["indicators"]["price"]),
+                    direction=sig,
+                    price=price,
                     timeframe=config.analysis_timeframe,
                     signal_type="market_scan",
-                    score=result.get("teddy_score", 0),
+                    score=score,
                     sl=result.get("sl"),
                     tp=result.get("tp"),
                     user_id=user_id,
@@ -351,7 +368,10 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                 log_error(logger, user_id, f"scheduled_market_analysis.{symbol}", str(e))
 
         report = _format_market_scan_report(config, scanned, saved, rejected_by_risk, errors)
+        logger.info(f"--- Rapport final User {user_id} ---\n{report}")
         try:
-            await context.bot.send_message(chat_id=user_id, text=report, parse_mode="Markdown")
+            if context and hasattr(context, "bot"):
+                await context.bot.send_message(chat_id=user_id, text=report, parse_mode="Markdown")
         except Exception as e:
             log_error(logger, user_id, "scheduled_market_analysis.report", str(e))
+

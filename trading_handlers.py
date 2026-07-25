@@ -10,7 +10,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from trading_config import get_config, update_config, save_binance_credentials
-from binance_manager import test_connection, BinanceClientError
+from binance_manager import test_connection, get_full_account_info, BinanceClientError
 from position_manager import get_open_trades, close_trade_manual, emergency_stop_all
 from execution_engine import execute_signal, fetch_pending_signals, mark_signal_status
 from database import get_connection
@@ -164,6 +164,65 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /account — Visualisation complète du solde, PnL et positions Binance."""
+    user_id = update.effective_user.id
+    config = get_config(user_id)
+
+    try:
+        info = get_full_account_info(user_id, market_type=config.market_type)
+    except BinanceClientError as e:
+        msg = f"❌ {e}"
+        if update.callback_query:
+            await update.callback_query.edit_message_text(msg)
+        else:
+            await update.message.reply_text(msg)
+        return
+
+    lines = [
+        f"💼 *Tableau de Bord Compte Binance ({info['market_type'].upper()})*",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"💰 *Solde Total* : `{info['total_wallet_balance']:.2f} USDT`",
+        f"💵 *Disponible* : `{info['available_balance']:.2f} USDT`",
+        f"📊 *PnL Non Réalisé* : `{info['unrealized_pnl']:+.2f} USDT`",
+    ]
+
+    if info["market_type"] == "futures":
+        lines.append(f"⚡ *Taux Marge Utilisée* : `{info['margin_used_pct']}%`")
+
+    lines.append("\n🪙 *Détail des Actifs* :")
+    if info["assets"]:
+        for a in info["assets"][:5]:
+            if info["market_type"] == "futures":
+                lines.append(f"  • *{a['asset']}* : {a['wallet']:.4f} (PnL: {a.get('unrealized_pnl', 0):+.2f})")
+            else:
+                lines.append(f"  • *{a['asset']}* : {a['total']:.4f} (~{a.get('usdt_value', 0):.2f} USDT)")
+    else:
+        lines.append("  *Aucun actif actif.*")
+
+    lines.append("\n📈 *Positions Ouvertes Binance* :")
+    if info["positions"]:
+        for p in info["positions"]:
+            lines.append(
+                f"  • *{p['symbol']}* ({p['side']} x{p['leverage']})\n"
+                f"    Qty: {p['quantity']} | Entrée: {p['entry_price']:.4f} | Prix: {p['mark_price']:.4f}\n"
+                f"    PnL: `{p['unrealized_pnl']:+.2f} USDT` | Liq: {p['liquidation_price']:.4f}"
+            )
+    else:
+        lines.append("  *Aucune position ouverte sur Binance.*")
+
+    if info.get("recent_trades"):
+        lines.append(f"\n💸 *Commissions Récentes* : `{info['total_commissions']:.4f} USDT`")
+
+    keyboard = [[InlineKeyboardButton("🔄 Rafraîchir", callback_data="cmd_account")]]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup, parse_mode="Markdown")
+    else:
+        await update.message.reply_text("\n".join(lines), reply_markup=markup, parse_mode="Markdown")
+
+
 async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conn = get_connection()
@@ -298,29 +357,39 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data == "menu_market_mode":
         config = get_config(user_id)
+        spot_label = "🟢 Spot (Actif)" if config.market_type == "spot" else "Spot"
+        futures_label = "🟢 Futures (Actif)" if config.market_type == "futures" else "Futures"
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Spot", callback_data="set_market_spot"),
-                InlineKeyboardButton("Futures", callback_data="set_market_futures"),
+                InlineKeyboardButton(spot_label, callback_data="set_market_spot"),
+                InlineKeyboardButton(futures_label, callback_data="set_market_futures"),
             ],
-            [InlineKeyboardButton("Retour AutoTrade", callback_data="menu_autotrade")],
+            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade")],
         ])
         await query.edit_message_text(
-            f"Mode de marche actuel : {config.market_type}\nChoisis le mode a utiliser.",
+            f"🎯 *Mode de Marché Actuel :* `{config.market_type.upper()}`\n\n"
+            f"Choisis le mode à utiliser pour les analyses et la prise d'ordres.",
             reply_markup=keyboard,
+            parse_mode="Markdown",
         )
 
     elif data.startswith("set_market_"):
         market_type = data.replace("set_market_", "")
         if market_type not in ("spot", "futures"):
-            await query.edit_message_text("Mode de marche invalide.")
+            await query.edit_message_text("Mode de marché invalide.")
             return
         update_config(user_id, market_type=market_type)
-        await query.edit_message_text(f"Mode de marche mis a jour : {market_type}")
+        # Re-render menu_market_mode directly
+        query.data = "menu_market_mode"
+        await trading_callback_router(update, context)
 
     elif data == "menu_analysis_config":
         config = get_config(user_id)
+        p_status = "ACTIVÉE ✅" if config.periodic_analysis_enabled else "DÉSACTIVÉE ❌"
         keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"Analyse Périodique ({p_status})", callback_data="toggle_periodic_analysis"),
+            ],
             [
                 InlineKeyboardButton("5 min", callback_data="set_analysis_interval_5"),
                 InlineKeyboardButton("10 min", callback_data="set_analysis_interval_10"),
@@ -338,15 +407,24 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("Swing", callback_data="set_analysis_style_swing"),
                 InlineKeyboardButton("Position", callback_data="set_analysis_style_position"),
             ],
-            [InlineKeyboardButton("Retour AutoTrade", callback_data="menu_autotrade")],
+            [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade")],
         ])
         await query.edit_message_text(
-            f"Analyse periodique\n"
-            f"Intervalle : {config.analysis_interval_minutes} min\n"
-            f"Timeframe : {config.analysis_timeframe}\n"
-            f"Style : {config.trading_style}",
+            f"📊 *Configuration Analyse Périodique*\n\n"
+            f"État : *{p_status}*\n"
+            f"Intervalle : *{config.analysis_interval_minutes} min*\n"
+            f"Timeframe : *{config.analysis_timeframe}*\n"
+            f"Style : *{config.trading_style}*",
             reply_markup=keyboard,
+            parse_mode="Markdown",
         )
+
+    elif data == "toggle_periodic_analysis":
+        config = get_config(user_id)
+        new_val = not config.periodic_analysis_enabled
+        update_config(user_id, periodic_analysis_enabled=new_val)
+        query.data = "menu_analysis_config"
+        await trading_callback_router(update, context)
 
     elif data.startswith("set_analysis_interval_"):
         interval = int(data.replace("set_analysis_interval_", ""))

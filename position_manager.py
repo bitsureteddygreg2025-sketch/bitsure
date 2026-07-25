@@ -109,7 +109,36 @@ def _persist_new_sl(trade_id: int, new_sl: float):
 
 
 async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
-    """Job APScheduler : à appeler toutes les 10-20s."""
+    """Job APScheduler : à appeler toutes les 10-20s (surveille positions réelles et paper)."""
+    # 1. Paper trading SL/TP check
+    try:
+        from paper_trader import paper_trader
+        closed_paper = paper_trader.check_exits()
+        for pos in closed_paper:
+            uid = int(pos["user_id"]) if "user_id" in pos else None
+            if not uid and "id" in pos:
+                pass
+            pnl_net = pos.get("pnl_usdt", 0) - pos.get("fees_total", 0)
+            emoji = "🟢" if pnl_net >= 0 else "🔴"
+            if uid and context and hasattr(context, "bot"):
+                try:
+                    await context.bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            f"{emoji} *[PAPER TRADING] Position Fermée ({pos.get('exit_reason')})*\n"
+                            f"Symbole : `{pos['symbol']}` ({pos.get('side')})\n"
+                            f"Prix Sortie : {pos['exit_price']:.4f}\n"
+                            f"PnL Net : `{pnl_net:+.2f} USDT`\n"
+                            f"Capital Virtuel : `{pos.get('capital_after', 0):.2f} USDT`"
+                        ),
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    pass
+    except Exception as e:
+        log_error(logger, 0, "monitor_paper_positions", str(e))
+
+    # 2. Binance real trading positions check
     for trade in get_open_trades():
         try:
             config = get_config(trade["user_id"])

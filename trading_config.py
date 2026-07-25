@@ -27,6 +27,7 @@ except ImportError:
 
 DEFAULTS = {
     "auto_trade": os.getenv("AUTO_TRADE_DEFAULT", "False") == "True",
+    "periodic_analysis_enabled": os.getenv("PERIODIC_ANALYSIS_DEFAULT", "False") == "True",
     "leverage": int(os.getenv("DEFAULT_LEVERAGE", 1)),
     "risk_per_trade": float(os.getenv("DEFAULT_RISK_PER_TRADE", 1.0)),
     "max_positions": int(os.getenv("DEFAULT_MAX_POSITIONS", 3)),
@@ -57,6 +58,7 @@ def _coerce_symbol_list(value) -> List[str]:
 class TradingConfig:
     user_id: int
     auto_trade: bool = DEFAULTS["auto_trade"]
+    periodic_analysis_enabled: bool = DEFAULTS["periodic_analysis_enabled"]
     leverage: int = DEFAULTS["leverage"]
     risk_per_trade: float = DEFAULTS["risk_per_trade"]
     max_positions: int = DEFAULTS["max_positions"]
@@ -85,15 +87,15 @@ def ensure_config_row(user_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO trading_config (user_id, auto_trade, leverage, risk_per_trade,
+                INSERT INTO trading_config (user_id, auto_trade, periodic_analysis_enabled, leverage, risk_per_trade,
                     max_positions, min_score, max_daily_loss, trailing_stop, dca_enabled,
                     market_type, trading_style, analysis_timeframe,
                     analysis_interval_minutes, testnet)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO NOTHING
                 """,
                 (
-                    user_id, DEFAULTS["auto_trade"], DEFAULTS["leverage"],
+                    user_id, DEFAULTS["auto_trade"], DEFAULTS["periodic_analysis_enabled"], DEFAULTS["leverage"],
                     DEFAULTS["risk_per_trade"], DEFAULTS["max_positions"],
                     DEFAULTS["min_score"], DEFAULTS["max_daily_loss"],
                     DEFAULTS["trailing_stop"], DEFAULTS["dca_enabled"],
@@ -119,7 +121,7 @@ def get_config(user_id: int) -> TradingConfig:
                        dca_enabled, dca_steps, dca_step_pct, symbol_whitelist,
                        symbol_blacklist, market_type, trading_style,
                        analysis_timeframe, analysis_interval_minutes, testnet,
-                       cooldown_seconds, daily_loss_accum
+                       cooldown_seconds, daily_loss_accum, periodic_analysis_enabled
                 FROM trading_config WHERE user_id = %s
                 """,
                 (user_id,),
@@ -144,6 +146,7 @@ def get_config(user_id: int) -> TradingConfig:
         analysis_interval_minutes=row[17] or DEFAULTS["analysis_interval_minutes"],
         testnet=row[18], cooldown_seconds=row[19] or 0,
         daily_loss_accum=row[20] or 0.0,
+        periodic_analysis_enabled=bool(row[21]) if len(row) > 21 and row[21] is not None else False,
     )
 
 
