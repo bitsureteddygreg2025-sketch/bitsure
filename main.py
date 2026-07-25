@@ -342,7 +342,7 @@ def main():
     app.add_handler(
         CallbackQueryHandler(
             menu_callback,
-            pattern="^(menu_(?!autotrade|positions|trading_config|leverage|risk|maxpos|minscore|trailing|whitelist|blacklist|pnl|history_trades)|cmd_|paperdir_|clearalerts_)"
+            pattern="^(menu_(?!autotrade|market_mode|analysis_config|positions|trading_config|leverage|risk|maxpos|minscore|trailing|whitelist|blacklist|pnl|history_trades)|cmd_|paperdir_|clearalerts_)"
         )
     )
 
