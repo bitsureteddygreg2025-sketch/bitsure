@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -7,135 +6,13 @@ import pandas as pd
 import random
 import hashlib
 import time
-import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from config import (
-    ADMIN_ID, DEFAULT_TIMEFRAME, SYMBOL_CONFIGS, ATR_MULTIPLIER_SL, RR_RATIO_TARGET,
-    PAPER_DEFAULT_LEVERAGE, PAPER_MAX_LEVERAGE, PAPER_FEES_PCT, PAPER_SLIPPAGE_PCT,
-)
-from data_fetcher import DataFetcher
-from signal_engine import SignalEngine
-from indicators import atr
-from user_manager import UserManager
-from alert_manager import AlertManager
-from history_manager import HistoryManager
-from utils import format_number, is_valid_symbol, normalize_symbol
-from i18n import get_text
-from payments import generate_binance_payment
-from paper_trader import PaperTrader
-
-logger = logging.getLogger(__name__)
-fetcher = DataFetcher.get_instance()
-user_mgr = UserManager.get_instance()
-alert_mgr = AlertManager.get_instance()
-history_mgr = HistoryManager.get_instance()
-weekly_scheduler = None
-paper_trader = PaperTrader()
-
-SYMBOLS_12 = [
-    "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY",
-    "AUDUSD", "XAUUSD", "AAPL", "TSLA", "NVDA"
-]
-
-def generate_signal_id():
-    raw = f"{time.time()}-{random.random()}"
-    return hashlib.md5(raw.encode()).hexdigest()[:6].upper()
-
-def get_user_lang(update: Update) -> str:
-    user_id = update.effective_user.id
-    return user_mgr.get_setting(user_id, "lang", "en")
-
-async def respond(update: Update, text: str, **kwargs):
-    if update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(text, **kwargs)
-        except:
-            await update.callback_query.message.reply_text(text, **kwargs)
-    else:
-        await update.message.reply_text(text, **kwargs)
-
-# =========================================================
-# ALERT INPUT HANDLER
-# =========================================================
-
-async def handle_pending_alert_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if not update.message or not update.message.text:
-        return False
-    pending_symbol = context.user_data.get("pending_alert_symbol")
-    pending_cond = context.user_data.get("pending_alert_cond")
-    if not pending_symbol or not pending_cond:
-        return False
-    lang = get_user_lang(update)
-    try:
-        price = float(update.message.text.strip())
-        if price <= 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text(get_text(lang, "alert_price_invalid_retry"))
-        return True
-    symbol = normalize_symbol(pending_symbol)
-    cond_label = get_text(lang, "cond_above") if pending_cond == "above" else get_text(lang, "cond_below")
-    ok, result = alert_mgr.add_alert(update.effective_user.id, symbol, pending_cond, price)
-    if not ok:
-        await update.message.reply_text(f"❌ Limite atteinte ({result} alertes max)")
-        return True
-    await update.message.reply_text(get_text(lang, "alert_created", id=result, symbol=symbol, cond=cond_label, price=price))
-    context.user_data.pop("pending_alert_symbol", None)
-    context.user_data.pop("pending_alert_cond", None)
-    return True
-
-# =========================================================
-# LIMIT CHECK
-# =========================================================
-
-def check_limit(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        lang = get_user_lang(update)
-        import logging
-        logging.getLogger(__name__).warning(f"[check_limit] func={func.__name__}, user={user_id}")
-        if not user_mgr.can_access_bot(user_id):
-            if update.callback_query:
-                await update.callback_query.answer("🚧 Access by invitation only. Contact @btsr_teddy09", show_alert=True)
-                return
-            else:
-                await update.message.reply_text("🚧 Access by invitation only.\n\nContact @btsr_teddy09 to get an invitation.")
-                return
-        if func.__name__ != "start" and not user_mgr.has_accepted_terms(user_id) and not user_mgr.is_admin(user_id):
-            if update.callback_query:
-                await update.callback_query.answer(get_text(lang, "terms_must_accept"), show_alert=True)
-                return
-            else:
-                await update.message.reply_text(get_text(lang, "terms_must_accept"))
-                return
-        if not user_mgr.check_limit(user_id):
-            if update.callback_query:
-                await update.callback_query.answer(get_text(lang, "limit_reached"), show_alert=True)
-                return
-            else:
-                await update.message.reply_text(get_text(lang, "limit_reached"))
-                return
-        if not user_mgr.is_admin(user_id):
-import asyncio
-import logging
-from datetime import datetime
-import matplotlib.pyplot as plt
-import io
-import pandas as pd
-import random
-import hashlib
-import time
-import os
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
-from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
-from config import (
-    ADMIN_ID, DEFAULT_TIMEFRAME, SYMBOL_CONFIGS, ATR_MULTIPLIER_SL, RR_RATIO_TARGET,
-    PAPER_DEFAULT_LEVERAGE, PAPER_MAX_LEVERAGE, PAPER_FEES_PCT, PAPER_SLIPPAGE_PCT,
+    ADMIN_ID, DEFAULT_TIMEFRAME, ATR_MULTIPLIER_SL, RR_RATIO_TARGET,
+    PAPER_MAX_LEVERAGE,
 )
 from data_fetcher import DataFetcher
 from signal_engine import SignalEngine
@@ -274,14 +151,7 @@ async def notify_admin_new_premium(context: ContextTypes.DEFAULT_TYPE, user, rol
 # START & HELP
 # =========================================================
 
-@check_limit
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_user_lang(update)
-    await update.message.reply_text(get_text(lang, "help_redirect"), parse_mode=ParseMode.MARKDOWN)
 
-@check_limit
-async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_text(get_user_lang(update), "support"))
 
 # =========================================================
 # MENU PRINCIPAL
@@ -401,9 +271,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid  = update.effective_user.id
         tf   = user_mgr.get_setting(uid, "timeframe", DEFAULT_TIMEFRAME)
         style = user_mgr.get_setting(uid, "trading_style", "day")
-        style_names = {"day": "Day Trader", "swing": "Swing Trader", "position": "Position Trader"}
-        style_names.update({"scalping": "Scalping (5m)"})
-        style_display = style_names.get(style, style)
+        await send_settings_menu(lang, tf, style, uid, query.message.reply_text, edit_fn=safe_edit)
+
+    elif data.startswith("cmd_"):
+        cmd = data[4:]
         if cmd.startswith("alertcond_"):
             _, symbol, cond = cmd.split("_")
             context.user_data["pending_alert_symbol"] = symbol
@@ -730,7 +601,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
     trial_msg = ""
     if user_mgr.get_role(update.effective_user.id) == "free" and user_mgr.is_trial_valid(update.effective_user.id):
-        from datetime import datetime
         from config import TRIAL_DAYS
         user_id = update.effective_user.id
         user = user_mgr.get_user(user_id)
@@ -1141,44 +1011,7 @@ async def send_settings_menu(lang: str, tf: str, style: str, uid: int,
     else:
         await send_fn(recap, reply_markup=reply_markup)
 
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
-    lang = user_mgr.get_setting(uid, "lang", "en")
-    tf   = user_mgr.get_setting(uid, "timeframe", DEFAULT_TIMEFRAME)
-    style = user_mgr.get_setting(uid, "trading_style", "day")
-
-    await send_settings_menu(
-        lang=lang,
-        tf=tf,
-        style=style,
-        uid=uid,
-        send_fn=update.message.reply_text,
-
-    recap_lines = [
-        f"*{get_text(lang, 'settings_title')}*",
-        f"{get_text(lang, 'settings_timeframe')} : `{tf}`",
-        f"{get_text(lang, 'settings_style')} : {style_display}",
-        f"{get_text(lang, 'settings_lang')} : {lang.upper()}",
-        "",
-        get_text(lang, "settings_edit"),
-    ]
-    recap = "\n".join(recap_lines)
-
-    keyboard = [
-        [InlineKeyboardButton(get_text(lang, "btn_settimeframe"), callback_data="cmd_settimeframe")],
-        [InlineKeyboardButton(get_text(lang, "btn_setlanguage"),  callback_data="cmd_setlanguage")],
-        [InlineKeyboardButton("🎯 Trading Style",                  callback_data="cmd_setstyle")],
-        [InlineKeyboardButton(get_text(lang, "btn_historique"),   callback_data="cmd_historique")],
-        [InlineKeyboardButton(get_text(lang, "btn_support"),      callback_data="cmd_support")],
-        [InlineKeyboardButton(get_text(lang, "back"),             callback_data="menu_back")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if edit_fn is not None:
-        await edit_fn(recap, keyboard)
-    else:
-        await send_fn(recap, reply_markup=reply_markup)
-
+@check_limit
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     lang = user_mgr.get_setting(uid, "lang", "en")
@@ -1394,22 +1227,54 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg += "\n" + get_text(lang, "paper_no_open_positions")
 
-        capital    = paper_trader.get_capital(user_id)
-        sizing, sizing_err = RiskManager.calculate_position_size(
-            capital=capital,
-            entry_price=price,
-            sl=sl,
-            leverage=leverage,
-            risk_percentage=0.01,
-        )
-        qty = sizing.qty if sizing is not None else 0
+        await respond(update, msg, parse_mode=ParseMode.MARKDOWN)
+
+    # ── BUY / SHORT ──────────────────────────────────────────────────────
+    elif action in ("buy", "short"):
+        if len(context.args) < 2:
+            await respond(update, f"Usage : /paper {action} SYMBOL [leverage]")
+            return
+        symbol = normalize_symbol(context.args[1].upper())
+        leverage = float(context.args[2]) if len(context.args) >= 3 else 1.0
+        leverage = max(1.0, min(leverage, float(PAPER_MAX_LEVERAGE)))
+
+        price_data = fetcher.get_cached_price(symbol)
+        if not price_data or "price" not in price_data:
+            df = await fetcher.get_historical_data(symbol, timeframe="5m")
+            if df is None or df.empty:
+                await respond(update, f"❌ Impossible de récupérer le prix pour {symbol}")
+                return
+            price = float(df["close"].iloc[-1])
+        else:
+            price = float(price_data["price"])
+
+        # Calcul SL/TP basés sur l'ATR
+        df = await fetcher.get_historical_data(symbol, timeframe="1h")
+        if df is not None and not df.empty:
+            atr_val = float(atr(df["high"], df["low"], df["close"]).iloc[-1])
+        else:
+            atr_val = price * 0.02
+
+        side = "BUY" if action == "buy" else "SELL"
+        if side == "BUY":
+            sl = price - (atr_val * ATR_MULTIPLIER_SL)
+            tp = price + (atr_val * ATR_MULTIPLIER_SL * RR_RATIO_TARGET)
+        else:
+            sl = price + (atr_val * ATR_MULTIPLIER_SL)
+            tp = price - (atr_val * ATR_MULTIPLIER_SL * RR_RATIO_TARGET)
+
+        capital = paper_trader.get_capital(user_id)
+        margin_to_use = capital * 0.05
+        notional_value = margin_to_use * leverage
+        qty = notional_value / price if price > 0 else 0
+
         if qty <= 0:
-            await respond(update, "❌ Capital insuffisant pour ouvrir une position.")
+            await respond(update, "❌ Capital insuffisant pour ouvrir une position simulée.")
             return
 
         pos, err = paper_trader.open_position(
             user_id, symbol, price, sl, tp, qty,
-            side="SELL", leverage=leverage,
+            side=side, leverage=leverage,
         )
         if err:
             await respond(update, f"❌ {err}")
@@ -1418,9 +1283,10 @@ async def paper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lev_str = f" (x{leverage:.0f})"
         new_capital = paper_trader.get_capital(user_id)
         fees_str = f"{pos.get('fees_total', 0):.4f}"
+        emoji = "🟢" if side == "BUY" else "🔴"
         await respond(
             update,
-            f"🔴 Position SHORT ouverte : *{symbol}*{lev_str}"
+            f"{emoji} Position {side} ouverte : *{symbol}*{lev_str}"
             f"\n📍 Entrée : {pos['entry_price']:.4f}"
             f" | SL : {sl:.4f} | TP : {tp:.4f}"
             f"\n📐 Qty : {qty:.6f}"
@@ -1664,18 +1530,7 @@ def start_signal_monitoring(app):
 
 signal_scheduler = None
 
-# =========================================================
-# UPGRADE & PAYMENTS
-# =========================================================
 
-@check_limit
-async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_user_lang(update)
-    keyboard = [
-        [InlineKeyboardButton(get_text(lang, "button_pro_stars"), callback_data="plan_pro_stars")],
-        [InlineKeyboardButton(get_text(lang, "button_binance_usdc"), callback_data="plan_binance")],
-    ]
-    await update.message.reply_text(get_text(lang, "upgrade_title"), parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @check_limit
 async def plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1701,7 +1556,6 @@ async def send_invoice(query, title: str, price_eur: int, payload: str):
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
-    payload = update.message.successful_payment.invoice_payload
     user_mgr.set_role(user_id, "pro")
     lang = user_mgr.get_setting(user_id, "lang", "en")
     await update.message.reply_text(get_text(lang, "payment_success", role="PRO"), parse_mode=ParseMode.MARKDOWN)

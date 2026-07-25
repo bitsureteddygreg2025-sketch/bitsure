@@ -4,16 +4,13 @@ Fonctions réservées à l'administrateur
 """
 
 import logging
-import requests
 import io
 import csv
 from telegram import Update
 from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
 from config import ADMIN_ID
 from data_fetcher import DataFetcher
 from user_manager import UserManager
-from alert_manager import AlertManager
 from history_manager import HistoryManager
 from i18n import get_text
 
@@ -39,8 +36,7 @@ def check_limit(func):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
-    
+
     # Statistiques globales
     total_row = user_mgr.conn.execute("SELECT COUNT(*) as total FROM users").fetchone()
     total = total_row["total"] if total_row else 0
@@ -93,13 +89,13 @@ async def teddy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your PRO subscription has been activated! Use /menu to start trading.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[teddy] Failed to notify user {uid}: {e}")
     elif user_mgr.approve_user(uid):
         await update.message.reply_text(f"✅ Utilisateur {uid} approuvé comme testeur")
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your access has been approved! Use /menu to start.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[teddy] Failed to notify user {uid}: {e}")
     else:
         await update.message.reply_text(f"❌ Utilisateur {uid} introuvable")
 
@@ -141,7 +137,6 @@ async def switchapi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔ Admin only.")
         return
-    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
     fetcher = DataFetcher.get_instance()
     current = fetcher.active_source or "none"
     if not context.args:
@@ -201,7 +196,7 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text="✅ Your PRO subscription has been activated! Use /menu to start trading.")
         except Exception as e:
-            errors.append(str(e))
+            logger.error(f"[confirm_payment] Failed to notify user {uid}: {e}")
     else:
         await update.message.reply_text(get_text(lang, "confirm_payment_missing", user_id=uid))
 
@@ -261,7 +256,6 @@ async def dbquery(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def exportsignals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    lang = get_user_lang(update)
     signals = history_mgr.get_recent_signals(1000)
     if not signals:
         await update.message.reply_text("Aucun signal a exporter")
@@ -331,66 +325,7 @@ async def clearhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_text(lang, "clearhistory_done"))
 
 # =========================================================
-# QUOTA
-# =========================================================
-
-@check_limit
 # DELETE USER
-# =========================================================
-
-@check_limit
-
-# =========================================================
-# QUOTA
-# =========================================================
-
-@check_limit
-async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /deleteuser <user_id>")
-        return
-    output.seek(0)
-    await update.message.reply_document(
-        document=output.getvalue().encode('utf-8'),
-        filename='signals_export.csv',
-        caption=f'{len(signals)} signaux exportes'
-    )
-
-async def refreshhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
-    await update.message.reply_text(get_text(lang, "refreshhistory_start"))
-    from bot_handlers import check_signal_outcomes
-    await check_signal_outcomes(context.bot)
-    await update.message.reply_text(get_text(lang, "refreshhistory_done"))
-
-# =========================================================
-# CLEAR HISTORY
-# =========================================================
-
-@check_limit
-async def clearhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    lang = user_mgr.get_setting(update.effective_user.id, "lang", "en")
-    history_mgr.clear_all_signals()
-    await update.message.reply_text(get_text(lang, "clearhistory_done"))
-
-# =========================================================
-# QUOTA
-# =========================================================
-
-@check_limit
-# DELETE USER
-# =========================================================
-
-@check_limit
-
-# =========================================================
-# QUOTA
 # =========================================================
 
 @check_limit

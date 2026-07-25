@@ -12,9 +12,9 @@ from telegram.ext import ContextTypes
 from trading_config import get_config, update_config, save_binance_credentials
 from binance_manager import test_connection, get_full_account_info, BinanceClientError
 from position_manager import get_open_trades, close_trade_manual, emergency_stop_all
-from execution_engine import execute_signal, fetch_pending_signals, mark_signal_status
+from execution_engine import execute_signal, mark_signal_status
 from database import get_connection
-from trading_logger import get_trading_logger, log_error
+from trading_logger import get_trading_logger
 
 logger = get_trading_logger("trading_handlers")
 

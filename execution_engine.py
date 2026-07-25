@@ -11,7 +11,6 @@ les callbacks des boutons "✅ Ouvrir" / "❌ Refuser".
 """
 
 import time
-from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes

@@ -551,7 +551,6 @@ class PaperTrader:
         capital : solde disponible (margin liberee + PnL net accumule)
         equity  : capital + PnL non realise des positions ouvertes
         """
-        uid      = self._uid(user_id)
         capital  = self.get_capital(user_id)
         closed   = self.get_closed_positions(user_id)
         open_pos = self.get_positions(user_id)
