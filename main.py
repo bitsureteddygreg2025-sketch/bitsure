@@ -109,7 +109,7 @@ from trading_handlers import (
     cmd_pnl,
     cmd_account,
     cmd_trade_history,
-    cmd_setleverage,
+    cmd_setleverage, cmd_setsecurity, cmd_confirmmanual,
     cmd_setrisk,
     cmd_whitelist,
     cmd_blacklist,
@@ -292,6 +292,8 @@ def main():
         # ================= AUTOTRADE =================
 
         ("setapikeys", cmd_setapikeys),
+        ("setsecurity", cmd_setsecurity),
+        ("confirmmanual", cmd_confirmmanual),
         ("autotrade", cmd_autotrade),
         ("config", cmd_config),
         ("positions", cmd_positions),
@@ -393,7 +395,7 @@ pattern="^(menu_(?!autotrade|live|market_mode|analysis_config|positions|trading_
     app.add_handler(
         CallbackQueryHandler(
             trading_callback_router,
-            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_|menu_leverage|set_leverage_|menu_risk|set_risk_|menu_maxpos|set_maxpos_|menu_minscore|set_minscore_|menu_trailing|toggle_trailing|set_trailing_|menu_whitelist|menu_blacklist|menu_pnl|menu_history_trades)"
+            pattern="^(menu_autotrade|toggle_autotrade|menu_market_mode|set_market_|menu_analysis_config|toggle_periodic_analysis|set_analysis_|menu_positions|menu_trading_config|trading_open_|trading_reject_|trading_edit_|manual_trade_execute_|manual_trade_cancel_|menu_leverage|set_leverage_|menu_risk|set_risk_|menu_maxpos|set_maxpos_|menu_minscore|set_minscore_|menu_trailing|toggle_trailing|set_trailing_|menu_whitelist|menu_blacklist|menu_pnl|menu_history_trades)"
         )
     )
 

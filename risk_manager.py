@@ -8,16 +8,19 @@ Toute la logique de gestion du risque :
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 from trading_config import TradingConfig, record_daily_loss
-from binance_manager import get_account_balance, get_open_binance_positions, BinanceClientError
+from binance_manager import get_account_balance, get_available_balance, get_open_binance_positions, BinanceClientError
 from database import get_connection
 from utils import normalize_symbol
 
 logger = logging.getLogger("risk_manager")
+MAX_EXPOSURE_PCT = float(os.getenv("MAX_POSITION_EXPOSURE_PCT", "50"))
+MIN_STOP_DISTANCE_PCT = float(os.getenv("MIN_STOP_DISTANCE_PCT", "0.05"))
 
 
 @dataclass
@@ -38,6 +41,22 @@ def count_local_open_positions(user_id: int) -> int:
     finally:
         conn.close()
 
+
+
+def count_duplicate_open_positions(user_id: int, symbol: str, direction: str) -> int:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM trades
+                WHERE user_id = %s AND status = 'open' AND symbol = %s AND direction = %s
+                """,
+                (user_id, symbol.upper(), direction.upper()),
+            )
+            return cur.fetchone()[0]
+    finally:
+        conn.close()
 
 
 def count_open_positions(user_id: int) -> int:
@@ -73,12 +92,15 @@ def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
     return RiskCheckResult(True)
 
 
-def check_can_open_position(user_id: int, config: TradingConfig, symbol: str) -> RiskCheckResult:
+def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, direction: str | None = None) -> RiskCheckResult:
     """Vérifie toutes les règles de risque avant d'ouvrir une nouvelle position."""
 
     symbol_check = check_symbol_allowed(config, symbol)
     if not symbol_check.allowed:
         return symbol_check
+
+    if direction and count_duplicate_open_positions(user_id, symbol, direction) > 0:
+        return RiskCheckResult(False, f"Une position {direction.upper()} est déjà ouverte sur {symbol.upper()}.")
 
     local_open_count = count_local_open_positions(user_id)
     remote_open_count = 0
@@ -146,8 +168,22 @@ def calculate_position_size(
 
     if price_distance <= 0:
         raise ValueError("SL invalide : distance nulle avec le prix d'entrée.")
+    stop_distance_pct = (price_distance / entry_price) * 100 if entry_price else 0
+    if stop_distance_pct < MIN_STOP_DISTANCE_PCT:
+        raise ValueError(f"SL trop serré ({stop_distance_pct:.4f}%). Minimum configuré: {MIN_STOP_DISTANCE_PCT}%.")
 
     quantity = risk_amount / price_distance
+    notional = quantity * entry_price
+    max_notional = balance * (MAX_EXPOSURE_PCT / 100)
+    if notional > max_notional:
+        raise ValueError(f"Exposition trop élevée ({notional:.2f} USDT > plafond {max_notional:.2f} USDT).")
+
+    if market_type == "futures":
+        available = get_available_balance(user_id, market_type=market_type)
+        required_margin = notional / max(int(config.leverage or 1), 1)
+        if required_margin > available:
+            raise ValueError(f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT).")
+
     return quantity
 
 
