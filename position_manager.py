@@ -132,6 +132,19 @@ def _persist_new_sl(trade_id: int, new_sl: float):
 
 
 
+
+
+def _remote_position_exists(user_id: int, symbol: str, direction: str) -> bool:
+    positions = get_open_binance_positions(user_id, market_type="futures")
+    return any(p["symbol"] == symbol and p["direction"] == direction for p in positions)
+
+
+def _cancel_remaining_protection(trade: dict, executed_reason: str) -> None:
+    # Si TP exécuté, annuler le SL restant; si SL exécuté, annuler le TP restant.
+    oid = trade.get("sl_order_id") if executed_reason == "TP" else trade.get("tp_order_id")
+    if oid:
+        cancel_order(trade["user_id"], trade["symbol"], oid, trade["market_type"])
+
 def _trade_key(trade: dict) -> tuple[str, str]:
     return (trade["symbol"], trade["direction"])
 
@@ -263,6 +276,11 @@ async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
                         trade["user_id"], trade["symbol"], trade["direction"],
                         trade["quantity"], trade["market_type"],
                     )
+                elif _remote_position_exists(trade["user_id"], trade["symbol"], trade["direction"]):
+                    # Un prix local a touché SL/TP, mais Binance indique que la position existe encore:
+                    # ne jamais clôturer localement par supposition.
+                    continue
+                _cancel_remaining_protection(trade, reason)
                 pnl_usdt, pnl_pct = close_trade(trade, reason, current_price)
                 await context.bot.send_message(
                     chat_id=trade["user_id"],
@@ -324,11 +342,14 @@ def close_trade_manual(trade_id: int, user_id: int) -> dict:
 
 
 def emergency_stop_all(user_id: int) -> int:
-    """Ferme toutes les positions ouvertes d'un utilisateur et désactive l'auto-trade."""
+    """Ferme toutes les positions ouvertes localement et réellement ouvertes sur Binance."""
     from trading_config import update_config
 
     closed = 0
-    for trade in get_open_trades(user_id):
+    local_trades = get_open_trades(user_id)
+    local_keys = {(t["symbol"], t["direction"]): t for t in local_trades}
+
+    for trade in local_trades:
         try:
             current_price = get_price(user_id, trade["symbol"], trade["market_type"])
             close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"])
@@ -338,7 +359,19 @@ def emergency_stop_all(user_id: int) -> int:
             close_trade(trade, "emergency", current_price)
             closed += 1
         except Exception as e:
-            log_error(logger, user_id, "emergency_stop_all", str(e))
+            log_error(logger, user_id, "emergency_stop_all.local", str(e))
+
+    try:
+        for pos in get_open_binance_positions(user_id, market_type="futures"):
+            key = (pos["symbol"], pos["direction"])
+            if key in local_keys:
+                continue
+            close_position(user_id, pos["symbol"], pos["direction"], pos["quantity"], "futures")
+            for order in get_open_binance_orders(user_id, market_type="futures", symbol=pos["symbol"]):
+                cancel_order(user_id, pos["symbol"], order.get("orderId"), "futures")
+            closed += 1
+    except Exception as e:
+        log_error(logger, user_id, "emergency_stop_all.remote", str(e))
 
     reject_pending_trading_signals(user_id)
     update_config(user_id, auto_trade=False, periodic_analysis_enabled=False)

@@ -10,6 +10,7 @@ Dépendance : pip install python-binance
 import logging
 import hashlib
 import math
+from decimal import Decimal, ROUND_DOWN
 from typing import Optional, Literal
 
 import pandas as pd
@@ -134,7 +135,7 @@ def get_account_balance(user_id: int, asset: str = "USDT", market_type: MarketTy
 
 
 def get_symbol_filters(client: Client, symbol: str, market_type: MarketType) -> dict:
-    """Récupère step size / min notional pour arrondir correctement les quantités."""
+    """Récupère les filtres Binance (PRICE_FILTER, LOT_SIZE, etc.) du symbole."""
     if market_type == "futures":
         info = client.futures_exchange_info()
     else:
@@ -147,9 +148,25 @@ def get_symbol_filters(client: Client, symbol: str, market_type: MarketType) -> 
     raise BinanceClientError(f"Symbole {symbol} introuvable sur Binance.")
 
 
+def _quantize_down(value: float, quantum: str) -> Decimal:
+    q = Decimal(str(quantum))
+    if q <= 0:
+        return Decimal(str(value))
+    return (Decimal(str(value)) / q).to_integral_value(rounding=ROUND_DOWN) * q
+
+
+def format_step_value(value: float, quantum: str) -> str:
+    rounded = _quantize_down(value, quantum)
+    return format(rounded.normalize(), "f")
+
+
 def round_step_size(quantity: float, step_size: str) -> float:
-    precision = int(round(-math.log10(float(step_size))))
-    return math.floor(quantity * (10 ** precision)) / (10 ** precision)
+    return float(_quantize_down(quantity, step_size))
+
+
+def format_price_for_symbol(price: float, filters: dict) -> str:
+    tick_size = filters.get("PRICE_FILTER", {}).get("tickSize", "0.00000001")
+    return format_step_value(price, tick_size)
 
 
 def set_leverage(user_id: int, symbol: str, leverage: int) -> None:
@@ -198,8 +215,8 @@ def open_position(
         result = {"quantity": quantity}
 
         if market_type == "futures":
-            if leverage and leverage > 1:
-                set_leverage(user_id, symbol, leverage)
+            if leverage:
+                set_leverage(user_id, symbol, int(leverage))
 
             order_params = {
                 "symbol": symbol, "side": direction, "type": "MARKET", "quantity": quantity,
@@ -216,14 +233,14 @@ def open_position(
             if sl_price:
                 sl_order = client.futures_create_order(
                     symbol=symbol, side=opposite, type="STOP_MARKET",
-                    stopPrice=round(sl_price, 6), closePosition=True,
+                    stopPrice=format_price_for_symbol(sl_price, filters), closePosition=True,
                 )
                 result["sl_order_id"] = sl_order["orderId"]
 
             if tp_price:
                 tp_order = client.futures_create_order(
                     symbol=symbol, side=opposite, type="TAKE_PROFIT_MARKET",
-                    stopPrice=round(tp_price, 6), closePosition=True,
+                    stopPrice=format_price_for_symbol(tp_price, filters), closePosition=True,
                 )
                 result["tp_order_id"] = tp_order["orderId"]
 
@@ -263,6 +280,18 @@ def open_position(
             )
         raise BinanceClientError(f"Erreur Binance à l'ouverture : {getattr(e, 'message', str(e))}")
 
+
+
+def get_available_balance(user_id: int, market_type: MarketType = "futures", asset: str = "USDT") -> float:
+    client = _client_for_user(user_id)
+    try:
+        if market_type == "futures":
+            acc = client.futures_account()
+            return float(acc.get("availableBalance", 0.0))
+        info = client.get_asset_balance(asset=asset)
+        return float(info["free"]) if info else 0.0
+    except BinanceAPIException as e:
+        raise BinanceClientError(f"Erreur Binance (marge disponible) : {e.message}")
 
 
 def get_open_binance_positions(user_id: int, market_type: MarketType = "futures") -> list[dict]:
@@ -311,14 +340,17 @@ def close_position(
     opposite = "SELL" if direction == "BUY" else "BUY"
 
     try:
+        filters = get_symbol_filters(client, symbol, market_type)
+        step_size = filters.get("LOT_SIZE", {}).get("stepSize") or filters.get("MARKET_LOT_SIZE", {}).get("stepSize", "0.001")
+        qty = format_step_value(quantity, step_size)
         if market_type == "futures":
             order = client.futures_create_order(
                 symbol=symbol, side=opposite, type="MARKET",
-                quantity=quantity, reduceOnly=True,
+                quantity=qty, reduceOnly=True,
             )
         else:
             order = client.create_order(
-                symbol=symbol, side=opposite, type="MARKET", quantity=quantity
+                symbol=symbol, side=opposite, type="MARKET", quantity=qty
             )
         return {"order_id": order["orderId"]}
     except (BinanceAPIException, BinanceOrderException) as e:
