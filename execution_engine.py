@@ -20,7 +20,7 @@ from trading_config import get_config, TradingConfig
 from risk_manager import check_can_open_position, calculate_position_size
 from binance_manager import (
     open_position, get_price, get_tradable_symbols, get_klines_dataframe,
-    BinanceClientError,
+    make_client_order_id, BinanceClientError,
 )
 from history_manager import HistoryManager
 from signal_engine import SignalEngine
@@ -58,6 +58,35 @@ def mark_signal_status(signal_id: str, status: str):
     finally:
         conn.close()
 
+
+
+def validate_signal_for_execution(user_id: int, signal: dict, config: TradingConfig) -> tuple[bool, str | None]:
+    """Applique les garde-fous juste avant toute ouverture de position."""
+    if int(signal["user_id"]) != int(user_id):
+        return False, "Ce signal ne t'appartient pas."
+
+    if config.market_type == "spot" and signal["direction"] == "SELL":
+        return False, "SELL non supporté en mode Spot standard."
+
+    if signal.get("score") is not None and signal["score"] < config.min_score:
+        return False, f"Score insuffisant ({signal['score']} < {config.min_score})."
+
+    if signal.get("entry_price") is not None:
+        entry = signal["entry_price"]
+        sl = signal.get("sl")
+        tp = signal.get("tp")
+        if sl is None or tp is None:
+            return False, "SL/TP manquants."
+        if signal["direction"] == "BUY" and not (sl < entry < tp):
+            return False, "SL/TP incohérents avec un signal BUY."
+        if signal["direction"] == "SELL" and not (tp < entry < sl):
+            return False, "SL/TP incohérents avec un signal SELL."
+
+    risk_check = check_can_open_position(user_id, config, signal["symbol"])
+    if not risk_check.allowed:
+        return False, risk_check.reason or "Règle de risque non respectée."
+
+    return True, None
 
 def insert_trade_row(**fields) -> int:
     conn = get_connection()
@@ -132,6 +161,7 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
             tp_price=signal["tp"],
             market_type=config.market_type,
             leverage=config.leverage,
+            client_order_id=make_client_order_id("sig", signal["id"]),
         )
 
         fields.update({
@@ -160,20 +190,8 @@ async def process_signal_for_user(context: ContextTypes.DEFAULT_TYPE, signal: di
     user_id = signal["user_id"]
     config = get_config(user_id)
 
-    if config.market_type == "spot" and signal["direction"] == "SELL":
-        # Binance Spot standard ne supporte pas la vente à découvert (voir
-        # binance_manager.open_position). Autant rejeter ici plutôt que de
-        # tenter une exécution vouée à l'échec, ou proposer un bouton
-        # "✅ Ouvrir" en semi-auto qui échouerait systématiquement au clic.
-        mark_signal_status(signal["id"], "rejected")
-        return
-
-    if signal["score"] is not None and signal["score"] < config.min_score:
-        mark_signal_status(signal["id"], "skipped")
-        return
-
-    risk_check = check_can_open_position(user_id, config, signal["symbol"])
-    if not risk_check.allowed:
+    allowed, _reason = validate_signal_for_execution(user_id, signal, config)
+    if not allowed:
         mark_signal_status(signal["id"], "skipped")
         return
 
@@ -232,6 +250,28 @@ async def scheduled_signal_scan(context: ContextTypes.DEFAULT_TYPE):
             await process_signal_for_user(context, signal)
         except Exception as e:
             log_error(logger, signal.get("user_id"), "scheduled_signal_scan", str(e))
+
+
+
+def get_configured_analysis_intervals() -> list[int]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT analysis_interval_minutes
+                FROM trading_config
+                WHERE (auto_trade = TRUE OR periodic_analysis_enabled = TRUE)
+                  AND analysis_interval_minutes IS NOT NULL
+                  AND analysis_interval_minutes > 0
+                """
+            )
+            intervals = {int(row[0]) for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    intervals.update({5, 10})
+    return sorted(intervals)
 
 
 def _get_auto_trade_user_ids(interval_minutes: int) -> list[int]:
@@ -345,6 +385,10 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                 logger.info(f"[{symbol}] Prix: {price:.4f} | RSI: {rsi} | MACD: {macd} | Score: {score} | Signal: {sig}")
 
                 if sig not in ("BUY", "SELL"):
+                    continue
+
+                if score < config.min_score:
+                    rejected_by_risk += 1
                     continue
 
                 if config.market_type == "spot" and sig == "SELL":

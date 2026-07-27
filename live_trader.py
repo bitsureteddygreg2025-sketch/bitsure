@@ -26,6 +26,7 @@ from binance_manager import (
 )
 from database import get_connection
 from trading_config import get_config
+from risk_manager import check_can_open_position
 from trading_logger import get_trading_logger
 from utils import normalize_symbol
 
@@ -129,6 +130,11 @@ def validate_draft(user_id: int, draft: LiveOrderDraft) -> dict:
         raise BinanceClientError("Le levier doit être entre 1 et 125.")
     if draft.amount <= 0:
         raise BinanceClientError("Le montant doit être supérieur à 0.")
+
+    config = get_config(user_id)
+    risk_check = check_can_open_position(user_id, config, draft.symbol)
+    if not risk_check.allowed:
+        raise BinanceClientError(risk_check.reason or "Règle de risque non respectée.")
 
     client = _client_for_user(user_id)
     max_leverage = _get_max_leverage(client, draft.symbol) if draft.market_type == "futures" else 1
