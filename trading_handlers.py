@@ -12,9 +12,10 @@ from telegram.ext import ContextTypes
 from trading_config import get_config, update_config, save_binance_credentials
 from binance_manager import test_connection, get_full_account_info, BinanceClientError
 from position_manager import get_open_trades, close_trade_manual, emergency_stop_all
-from execution_engine import execute_signal, mark_signal_status, validate_signal_for_execution
+from execution_engine import execute_signal, mark_signal_status, validate_signal_for_execution, insert_trade_row
 from database import get_connection
 from trading_logger import get_trading_logger
+from security_manager import has_security_code, set_initial_code, change_code, verify_code
 
 logger = get_trading_logger("trading_handlers")
 
@@ -33,12 +34,59 @@ NO_KEYS_MESSAGE = (
 )
 
 
+
+
+def _pop_security_code(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    if not context.args:
+        return None
+    candidate = context.args[-1].strip()
+    return candidate if len(candidate) == 6 else None
+
+
+def _sensitive_authorized(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, str]:
+    if not has_security_code(user_id):
+        return False, "Configure d'abord un code avec /setsecurity <code> (format 4827BZ)."
+    code = _pop_security_code(context)
+    if not code or not verify_code(user_id, code):
+        return False, "Code de sécurité manquant/invalide ou verrouillage temporaire. Ajoute le code en dernier argument."
+    return True, ""
+
+
+async def cmd_setsecurity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    if not has_security_code(user_id):
+        if len(context.args) != 1:
+            await context.bot.send_message(chat_id=user_id, text="Usage : /setsecurity <4827BZ>")
+            return
+        try:
+            set_initial_code(user_id, context.args[0])
+            await context.bot.send_message(chat_id=user_id, text="✅ Code de sécurité enregistré.")
+        except ValueError as e:
+            await context.bot.send_message(chat_id=user_id, text=f"⚠️ {e}")
+        return
+    if len(context.args) != 2:
+        await context.bot.send_message(chat_id=user_id, text="Usage : /setsecurity <ancien_code> <nouveau_code>")
+        return
+    try:
+        change_code(user_id, context.args[0], context.args[1])
+        await context.bot.send_message(chat_id=user_id, text="✅ Code de sécurité modifié.")
+    except ValueError as e:
+        await context.bot.send_message(chat_id=user_id, text=f"⚠️ {e}")
+
 # ---------------------------------------------------------------------------
 # Commandes utilisateur
 # ---------------------------------------------------------------------------
 
 async def cmd_setapikeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
 
     # Supprime le message contenant les clés pour éviter qu'il traîne dans le chat.
     try:
@@ -120,6 +168,10 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     if not context.args:
         await update.message.reply_text("Usage : /close <id_position>")
         return
@@ -258,6 +310,10 @@ async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setleverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("Usage : /setleverage <valeur_entière>")
         return
@@ -271,6 +327,10 @@ async def cmd_setleverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setrisk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     if not context.args:
         await update.message.reply_text("Usage : /setrisk <pourcentage>")
         return
@@ -312,6 +372,10 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     await update.message.reply_text("🛑 Fermeture de toutes les positions en cours...")
     closed = emergency_stop_all(user_id)
     await update.message.reply_text(
@@ -744,6 +808,22 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             lines.append(f"{emoji} `{symbol}` {direction} — {pnl:.2f} USDT ({reason})")
         await query.edit_message_text("\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
 
+    elif data.startswith("manual_trade_cancel_"):
+        token = data.replace("manual_trade_cancel_", "")
+        context.user_data.get("manual_trade_confirmations", {}).pop(token, None)
+        await query.edit_message_caption(caption="Analyse annulée. Aucun trade ouvert.")
+
+    elif data.startswith("manual_trade_execute_"):
+        token = data.replace("manual_trade_execute_", "")
+        if not context.user_data.get("manual_trade_confirmations", {}).get(token):
+            await query.edit_message_caption(caption="Confirmation expirée ou invalide.")
+            return
+        await query.message.reply_text(
+            "🔐 Pour exécuter ce trade réel, envoie en privé :\n"
+            f"/confirmmanual {token} <code_securite>\n"
+            "Le message sera supprimé automatiquement."
+        )
+
     elif data.startswith("trading_open_"):
         signal_id = data.replace("trading_open_", "")
         await _confirm_open_signal(query, context, signal_id)
@@ -763,6 +843,36 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"/editsignal {signal_id} <nouveau_sl> <nouveau_tp>"
         )
 
+
+
+async def cmd_confirmmanual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    if len(context.args) != 2:
+        await context.bot.send_message(chat_id=user_id, text="Usage : /confirmmanual <token> <code_securite>")
+        return
+    token, code = context.args
+    if not has_security_code(user_id) or not verify_code(user_id, code):
+        await context.bot.send_message(chat_id=user_id, text="🔐 Code de sécurité invalide ou temporairement verrouillé.")
+        return
+    signal = context.user_data.get("manual_trade_confirmations", {}).pop(token, None)
+    if not signal or int(signal.get("user_id")) != int(user_id):
+        await context.bot.send_message(chat_id=user_id, text="Confirmation expirée ou invalide.")
+        return
+    signal["id"] = f"manual-{token}"
+    config = get_config(user_id)
+    allowed, reason = validate_signal_for_execution(user_id, signal, config)
+    if not allowed:
+        await context.bot.send_message(chat_id=user_id, text=f"❌ Ouverture refusée : {reason}")
+        return
+    trade = execute_signal(signal, config)
+    if trade["status"] == "open":
+        await context.bot.send_message(chat_id=user_id, text=f"✅ Position ouverte : {trade['symbol']} {trade['direction']} qty={trade['quantity']}")
+    else:
+        await context.bot.send_message(chat_id=user_id, text=f"⚠️ Échec d'ouverture : {trade.get('error_message')}")
 
 
 def _signal_belongs_to_user(signal_id: str, user_id: int) -> bool:

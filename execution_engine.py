@@ -82,7 +82,7 @@ def validate_signal_for_execution(user_id: int, signal: dict, config: TradingCon
         if signal["direction"] == "SELL" and not (tp < entry < sl):
             return False, "SL/TP incohérents avec un signal SELL."
 
-    risk_check = check_can_open_position(user_id, config, signal["symbol"])
+    risk_check = check_can_open_position(user_id, config, signal["symbol"], signal.get("direction"))
     if not risk_check.allowed:
         return False, risk_check.reason or "Règle de risque non respectée."
 
@@ -397,7 +397,7 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                     rejected_spot_sell += 1
                     continue
 
-                risk_check = check_can_open_position(user_id, config, symbol)
+                risk_check = check_can_open_position(user_id, config, symbol, sig)
                 if not risk_check.allowed:
                     rejected_by_risk += 1
                     continue

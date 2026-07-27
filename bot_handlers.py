@@ -806,48 +806,33 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callb
                        adx=ind.get('adx') if pd.notna(ind.get('adx')) else 0.0, adx_state=adx_state,
                        sma20=format_number(ind['sma20']), sma50=format_number(ind['sma50']),
                        teddy_score=result['teddy_score'])
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
-    if result['signal'] not in ('BUY', 'SELL'):
-        pending_signals = 0
-    if pending_signals >= 50:
-        await msg.edit_text('🚫 Max 50 signals pending.')
-        return
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
-    if result['signal'] not in ('BUY', 'SELL'):
-        pending_signals = 0
-    if pending_signals >= 50:
-        await msg.edit_text('🚫 Max 50 signals pending.')
-        return
-    pending_signals = history_mgr.conn.execute("SELECT COUNT(*) FROM signals WHERE user_id = %s AND status = 'pending'", (update.effective_user.id,)).fetchone()[0]
-    if result['signal'] not in ('BUY', 'SELL'):
-        pending_signals = 0
-    if pending_signals >= 50:
-        await msg.edit_text('🚫 Max 50 signals pending.')
-        return
-    signal_id = history_mgr.add_signal(
-        symbol,
-        result['signal'],
-        ind['price'],
-        tf,
-        "analyse",
-        result['teddy_score'],
-        sl=result.get('sl'),
-        tp=result.get('tp'),
-        user_id=update.effective_user.id,
-        validation_status=result.get("validation_status", "VALIDATED" if result["signal"] in ("BUY", "SELL") else "REJECTED"),
-        validation_reason=result.get("reason") if result["signal"] in ("BUY", "SELL") else None,
-        rejection_reason=result.get("rejection_reason"),
-        rr_ratio=result.get("rr_ratio"),
-        asset_class=result.get("asset_class"),
-        params_used=result.get("params_used"),
-    )
-    if signal_id:
-        caption += f"\n\n🔐 ID: `{signal_id}`"
+    # Analyse manuelle: ne pas persister de signal exécutable automatiquement.
+    # Le signal est seulement mis en cache en mémoire pour une confirmation explicite.
+    manual_token = None
+    reply_markup = None
+    if result['signal'] in ('BUY', 'SELL'):
+        manual_token = generate_signal_id()
+        context.user_data.setdefault("manual_trade_confirmations", {})[manual_token] = {
+            "id": manual_token,
+            "user_id": update.effective_user.id,
+            "symbol": symbol,
+            "direction": result['signal'],
+            "entry_price": float(ind['price']),
+            "sl": result.get('sl'),
+            "tp": result.get('tp'),
+            "score": result.get('teddy_score'),
+            "created_at": time.time(),
+        }
+        caption += "\n\n⚠️ Analyse manuelle uniquement: aucun trade ne sera ouvert sans confirmation."
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Exécuter le trade", callback_data=f"manual_trade_execute_{manual_token}")],
+            [InlineKeyboardButton("Annuler", callback_data=f"manual_trade_cancel_{manual_token}")],
+        ])
     await msg.delete()
     if from_callback and update.callback_query:
-        await update.callback_query.message.reply_photo(photo=buf, caption=caption, parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.reply_photo(photo=buf, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     else:
-        await update.message.reply_photo(photo=buf, caption=caption, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_photo(photo=buf, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 # =========================================================
 # PRIX
