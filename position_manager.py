@@ -11,13 +11,36 @@ from typing import Optional
 from telegram.ext import ContextTypes
 
 from database import get_connection
-from trading_config import get_config, TradingConfig
+from trading_config import get_config, TradingConfig, update_config
 from risk_manager import record_trade_loss
-from binance_manager import get_price, close_position, cancel_order, BinanceClientError
+from binance_manager import (
+    get_price, close_position, cancel_order, get_open_binance_positions,
+    get_open_binance_orders, BinanceClientError,
+)
 from trading_logger import get_trading_logger, log_trade_closed, log_error
 
 logger = get_trading_logger("position_manager")
 
+
+
+def reject_pending_trading_signals(user_id: int) -> int:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE signals
+                SET status = 'rejected'
+                WHERE user_id = %s
+                  AND status IN ('pending', 'active', 'awaiting_confirmation')
+                """,
+                (user_id,),
+            )
+            count = cur.rowcount
+        conn.commit()
+        return count
+    finally:
+        conn.close()
 
 def get_open_trades(user_id: Optional[int] = None):
     conn = get_connection()
@@ -108,6 +131,102 @@ def _persist_new_sl(trade_id: int, new_sl: float):
         conn.close()
 
 
+
+def _trade_key(trade: dict) -> tuple[str, str]:
+    return (trade["symbol"], trade["direction"])
+
+
+def reconcile_user_positions(user_id: int) -> dict:
+    """Reconcile local open futures trades with real Binance positions/orders."""
+    local_trades = [t for t in get_open_trades(user_id) if t["market_type"] == "futures"]
+    if not local_trades:
+        local_by_key = {}
+    else:
+        local_by_key = {_trade_key(t): t for t in local_trades}
+
+    remote_positions = get_open_binance_positions(user_id, market_type="futures")
+    remote_by_key = {(p["symbol"], p["direction"]): p for p in remote_positions}
+
+    repaired = 0
+    missing_remote = []
+    missing_local = []
+
+    for key, trade in local_by_key.items():
+        if key in remote_by_key:
+            continue
+        missing_remote.append(key)
+        try:
+            current_price = get_price(user_id, trade["symbol"], trade["market_type"])
+            close_trade(trade, "reconciled_missing_remote", current_price)
+            repaired += 1
+        except Exception as e:
+            log_error(logger, user_id, "reconcile.close_local", str(e))
+
+    for key in remote_by_key:
+        if key not in local_by_key:
+            missing_local.append(key)
+
+    if missing_local:
+        log_error(
+            logger, user_id, "reconcile.missing_local",
+            f"Positions Binance sans trade local: {missing_local}",
+        )
+        update_config(user_id, auto_trade=False, periodic_analysis_enabled=False)
+        reject_pending_trading_signals(user_id)
+
+    try:
+        open_orders = get_open_binance_orders(user_id, market_type="futures")
+        open_order_ids = {str(order.get("orderId")) for order in open_orders if order.get("orderId") is not None}
+        for trade in local_trades:
+            for field in ("sl_order_id", "tp_order_id"):
+                oid = trade.get(field)
+                if oid and str(oid) not in open_order_ids and _trade_key(trade) in remote_by_key:
+                    log_error(
+                        logger, user_id, f"reconcile.{field}",
+                        f"Ordre protecteur absent côté Binance pour trade {trade['id']}: {oid}",
+                    )
+    except BinanceClientError as e:
+        log_error(logger, user_id, "reconcile.orders", str(e))
+
+    return {
+        "user_id": user_id,
+        "local_open": len(local_trades),
+        "remote_open": len(remote_positions),
+        "missing_remote": missing_remote,
+        "missing_local": missing_local,
+        "repaired": repaired,
+    }
+
+
+def _active_trading_user_ids() -> list[int]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT c.user_id
+                FROM binance_credentials c
+                LEFT JOIN trading_config t ON t.user_id = c.user_id
+                WHERE c.is_valid = TRUE
+                  AND COALESCE(t.market_type, 'futures') = 'futures'
+                """
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def reconcile_all_accounts(context=None) -> list[dict]:
+    reports = []
+    for user_id in _active_trading_user_ids():
+        try:
+            reports.append(reconcile_user_positions(user_id))
+        except BinanceClientError as e:
+            log_error(logger, user_id, "reconcile_all", str(e))
+        except Exception as e:
+            log_error(logger, user_id, "reconcile_all_unexpected", str(e))
+    return reports
+
 async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
     """Job APScheduler : à appeler toutes les 10-20s (surveille les positions réelles Binance).
 
@@ -136,7 +255,10 @@ async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
             if hit_tp or hit_sl:
                 reason = "TP" if hit_tp else "SL"
                 # En spot, le bot doit fermer lui-même (pas d'ordre stop natif posé).
-                if trade["market_type"] == "spot":
+                # En futures, si aucun ordre protecteur correspondant n'est connu, on
+                # ferme aussi explicitement pour éviter une clôture seulement locale.
+                protective_order_id = trade.get("tp_order_id") if hit_tp else trade.get("sl_order_id")
+                if trade["market_type"] == "spot" or not protective_order_id:
                     close_position(
                         trade["user_id"], trade["symbol"], trade["direction"],
                         trade["quantity"], trade["market_type"],
@@ -155,7 +277,13 @@ async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
 
             new_sl = update_trailing_stop(trade, config, current_price)
             if new_sl:
-                _persist_new_sl(trade["id"], new_sl)
+                if trade["market_type"] == "spot":
+                    _persist_new_sl(trade["id"], new_sl)
+                else:
+                    log_error(
+                        logger, trade["user_id"], "trailing_stop",
+                        "Trailing stop futures ignoré: mise à jour d'ordre Binance non implémentée.",
+                    )
 
         except BinanceClientError as e:
             log_error(logger, trade["user_id"], "monitor_open_positions", str(e))
@@ -212,5 +340,6 @@ def emergency_stop_all(user_id: int) -> int:
         except Exception as e:
             log_error(logger, user_id, "emergency_stop_all", str(e))
 
-    update_config(user_id, auto_trade=False)
+    reject_pending_trading_signals(user_id)
+    update_config(user_id, auto_trade=False, periodic_analysis_enabled=False)
     return closed

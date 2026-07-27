@@ -8,6 +8,7 @@ Dépendance : pip install python-binance
 """
 
 import logging
+import hashlib
 import math
 from typing import Optional, Literal
 
@@ -94,6 +95,14 @@ def get_klines_dataframe(
     return df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
 
 
+
+def make_client_order_id(prefix: str, unique_key: str, max_len: int = 36) -> str:
+    """Build a deterministic Binance-compatible client order id."""
+    safe_prefix = "".join(ch for ch in prefix if ch.isalnum() or ch in "_-")[:8] or "ord"
+    digest = hashlib.sha256(str(unique_key).encode("utf-8")).hexdigest()[:24]
+    return f"{safe_prefix}_{digest}"[:max_len]
+
+
 def get_price(user_id: int, symbol: str, market_type: MarketType = "futures") -> float:
     client = _client_for_user(user_id)
     try:
@@ -160,6 +169,7 @@ def open_position(
     tp_price: Optional[float],
     market_type: MarketType = "futures",
     leverage: int = 1,
+    client_order_id: Optional[str] = None,
 ) -> dict:
     """
     Ouvre une position au marché, puis place SL/TP.
@@ -173,6 +183,8 @@ def open_position(
         leverage = 1
         if direction == "SELL":
             raise BinanceClientError("Vente à découvert (SHORT) non supportée en mode Spot standard.")
+
+    opened_order = None
 
     try:
         filters = get_symbol_filters(client, symbol, market_type)
@@ -189,9 +201,13 @@ def open_position(
             if leverage and leverage > 1:
                 set_leverage(user_id, symbol, leverage)
 
-            order = client.futures_create_order(
-                symbol=symbol, side=direction, type="MARKET", quantity=quantity
-            )
+            order_params = {
+                "symbol": symbol, "side": direction, "type": "MARKET", "quantity": quantity,
+            }
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id
+            order = client.futures_create_order(**order_params)
+            opened_order = order
             result["order_id"] = order["orderId"]
             result["client_order_id"] = order.get("clientOrderId")
 
@@ -212,9 +228,10 @@ def open_position(
                 result["tp_order_id"] = tp_order["orderId"]
 
         else:  # spot
-            order = client.create_order(
-                symbol=symbol, side=direction, type="MARKET", quantity=quantity
-            )
+            order_params = {"symbol": symbol, "side": direction, "type": "MARKET", "quantity": quantity}
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id
+            order = client.create_order(**order_params)
             result["order_id"] = order["orderId"]
             result["client_order_id"] = order.get("clientOrderId")
             result["sl_order_id"] = None
@@ -225,7 +242,61 @@ def open_position(
     except (BinanceAPIException, BinanceOrderException) as e:
         if getattr(e, "code", None) in (-2015, -2014):
             mark_credentials_invalid(user_id, str(e))
+        if market_type == "futures" and opened_order:
+            opposite = "SELL" if direction == "BUY" else "BUY"
+            try:
+                client.futures_create_order(
+                    symbol=symbol, side=opposite, type="MARKET",
+                    quantity=quantity, reduceOnly=True,
+                )
+            except Exception as close_error:
+                logger.critical(
+                    "Position %s potentiellement ouverte sans protection pour user=%s après échec SL/TP: %s",
+                    symbol, user_id, close_error,
+                )
+                raise BinanceClientError(
+                    "Ordre principal ouvert mais protection SL/TP échouée; "
+                    "fermeture automatique impossible. Vérifie Binance immédiatement."
+                )
+            raise BinanceClientError(
+                "Ordre principal ouvert puis refermé car la protection SL/TP a échoué."
+            )
         raise BinanceClientError(f"Erreur Binance à l'ouverture : {getattr(e, 'message', str(e))}")
+
+
+
+def get_open_binance_positions(user_id: int, market_type: MarketType = "futures") -> list[dict]:
+    """Return real open positions from Binance for reconciliation/risk checks."""
+    if market_type != "futures":
+        return []
+    client = _client_for_user(user_id)
+    try:
+        positions = []
+        for pos in client.futures_position_information():
+            amt = float(pos.get("positionAmt", 0.0))
+            if amt == 0:
+                continue
+            positions.append({
+                "symbol": pos["symbol"],
+                "direction": "BUY" if amt > 0 else "SELL",
+                "quantity": abs(amt),
+                "entry_price": float(pos.get("entryPrice", 0.0)),
+                "mark_price": float(pos.get("markPrice", 0.0)),
+            })
+        return positions
+    except BinanceAPIException as e:
+        raise BinanceClientError(f"Erreur Binance (positions ouvertes) : {e.message}")
+
+
+def get_open_binance_orders(user_id: int, market_type: MarketType = "futures", symbol: Optional[str] = None) -> list[dict]:
+    """Return open Binance orders for reconciliation."""
+    client = _client_for_user(user_id)
+    try:
+        if market_type == "futures":
+            return client.futures_get_open_orders(symbol=symbol) if symbol else client.futures_get_open_orders()
+        return client.get_open_orders(symbol=symbol) if symbol else client.get_open_orders()
+    except BinanceAPIException as e:
+        raise BinanceClientError(f"Erreur Binance (ordres ouverts) : {e.message}")
 
 
 def close_position(

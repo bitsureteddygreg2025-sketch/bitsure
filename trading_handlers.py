@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 from trading_config import get_config, update_config, save_binance_credentials
 from binance_manager import test_connection, get_full_account_info, BinanceClientError
 from position_manager import get_open_trades, close_trade_manual, emergency_stop_all
-from execution_engine import execute_signal, mark_signal_status
+from execution_engine import execute_signal, mark_signal_status, validate_signal_for_execution
 from database import get_connection
 from trading_logger import get_trading_logger
 
@@ -91,8 +91,9 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Max positions : {config.max_positions}\n"
         f"Score minimum : {config.min_score}\n"
         f"Perte max/jour : {config.max_daily_loss}%\n"
-        f"Trailing stop : {'ON' if config.trailing_stop else 'OFF'} ({config.trailing_stop_pct}%)\n"
-        f"DCA : {'ON' if config.dca_enabled else 'OFF'}\n"
+        f"Trailing stop : {'ON' if config.trailing_stop else 'OFF'} ({config.trailing_stop_pct}%)"
+        f"{' — déplacement auto futures non disponible' if config.market_type == 'futures' else ''}\n"
+        f"DCA : {'configuré mais non disponible' if config.dca_enabled else 'OFF'}\n"
         f"Testnet : {'OUI' if config.testnet else 'NON — argent réel'}\n"
         f"Whitelist : {', '.join(config.symbol_whitelist) or '—'}\n"
         f"Blacklist : {', '.join(config.symbol_blacklist) or '—'}"
@@ -525,7 +526,9 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Style : {config.trading_style}\n"
             f"Max positions : {config.max_positions}\n"
             f"Score minimum : {config.min_score}\n"
-            f"Trailing stop : {trailing_str}\n\n"
+            f"Trailing stop : {trailing_str}"
+            f"{' — déplacement auto futures non disponible' if config.market_type == 'futures' else ''}\n"
+            f"DCA : {'configuré mais non disponible' if config.dca_enabled else 'OFF'}\n\n"
             f"Utilise les boutons ci-dessous pour ajuster, ou /config pour le détail complet.",
             reply_markup=keyboard,
             parse_mode="Markdown"
@@ -641,7 +644,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("⬅️ Retour Config", callback_data="menu_trading_config")],
         ])
         await query.edit_message_text(
-            f"📉 *Trailing Stop*\n\nÉtat : *{t_status}*\nDistance actuelle : *{config.trailing_stop_pct}%*",
+            f"📉 *Trailing Stop*\n\nÉtat : *{t_status}*\nDistance actuelle : *{config.trailing_stop_pct}%*\n"
+            f"Note : le déplacement automatique d’ordre stop futures n’est pas disponible.",
             reply_markup=keyboard,
             parse_mode="Markdown",
         )
@@ -746,6 +750,9 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data.startswith("trading_reject_"):
         signal_id = data.replace("trading_reject_", "")
+        if not _signal_belongs_to_user(signal_id, user_id):
+            await query.edit_message_text("❌ Ce signal ne t'appartient pas.")
+            return
         mark_signal_status(signal_id, "rejected")
         await query.edit_message_text("❌ Signal refusé.")
 
@@ -756,6 +763,27 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"/editsignal {signal_id} <nouveau_sl> <nouveau_tp>"
         )
 
+
+
+def _signal_belongs_to_user(signal_id: str, user_id: int) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM signals WHERE id = %s", (signal_id,))
+            row = cur.fetchone()
+            return bool(row and int(row[0]) == int(user_id))
+    finally:
+        conn.close()
+
+
+def _sl_tp_are_coherent(direction: str, entry_price: float | None, sl: float, tp: float) -> bool:
+    if entry_price is None:
+        return True
+    if direction == "BUY":
+        return sl < entry_price < tp
+    if direction == "SELL":
+        return tp < entry_price < sl
+    return False
 
 async def cmd_editsignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -786,7 +814,7 @@ async def cmd_editsignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, user_id, symbol, direction FROM signals WHERE id = %s",
+                "SELECT id, user_id, symbol, direction, entry_price, status FROM signals WHERE id = %s",
                 (signal_id,),
             )
             row = cur.fetchone()
@@ -794,9 +822,15 @@ async def cmd_editsignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Signal introuvable (peut-être déjà expiré).")
                 return
 
-            sig_id, sig_user_id, symbol, direction = row
+            sig_id, sig_user_id, symbol, direction, entry_price, status = row
             if int(sig_user_id) != int(user_id):
                 await update.message.reply_text("❌ Ce signal ne t'appartient pas.")
+                return
+            if status != "awaiting_confirmation":
+                await update.message.reply_text("❌ Ce signal n'est plus en attente de confirmation.")
+                return
+            if not _sl_tp_are_coherent(direction, entry_price, new_sl, new_tp):
+                await update.message.reply_text("❌ SL/TP incohérents avec le sens du signal et le prix d'entrée.")
                 return
 
             cur.execute(
@@ -824,7 +858,7 @@ async def _confirm_open_signal(query, context: ContextTypes.DEFAULT_TYPE, signal
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, user_id, symbol, direction, entry_price, sl, tp, score "
+                "SELECT id, user_id, symbol, direction, entry_price, sl, tp, score, status "
                 "FROM signals WHERE id = %s",
                 (signal_id,),
             )
@@ -836,9 +870,21 @@ async def _confirm_open_signal(query, context: ContextTypes.DEFAULT_TYPE, signal
         await query.edit_message_text("Signal introuvable (peut-être déjà expiré).")
         return
 
-    cols = ["id", "user_id", "symbol", "direction", "entry_price", "sl", "tp", "score"]
+    cols = ["id", "user_id", "symbol", "direction", "entry_price", "sl", "tp", "score", "status"]
     signal = dict(zip(cols, row))
+    if int(signal["user_id"]) != int(query.from_user.id):
+        await query.edit_message_text("❌ Ce signal ne t'appartient pas.")
+        return
+    if signal["status"] != "awaiting_confirmation":
+        await query.edit_message_text("❌ Ce signal n'est plus en attente de confirmation.")
+        return
+
     config = get_config(signal["user_id"])
+    allowed, reason = validate_signal_for_execution(query.from_user.id, signal, config)
+    if not allowed:
+        mark_signal_status(signal_id, "skipped")
+        await query.edit_message_text(f"❌ Ouverture refusée : {reason}")
+        return
 
     trade = execute_signal(signal, config)
     if trade["status"] == "open":

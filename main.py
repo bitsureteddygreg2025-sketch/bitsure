@@ -125,8 +125,10 @@ from live_handlers import (
     cmd_live_short,
     live_callback_router,
 )
-from execution_engine import scheduled_market_analysis, scheduled_signal_scan
-from position_manager import monitor_open_positions
+from execution_engine import (
+    get_configured_analysis_intervals, scheduled_market_analysis, scheduled_signal_scan,
+)
+from position_manager import monitor_open_positions, reconcile_all_accounts
 
 autotrade_scheduler = None
 
@@ -141,21 +143,32 @@ def start_autotrade_scheduler(app):
         kwargs={"context": app},
         id="scheduled_signal_scan", replace_existing=True
     )
-    autotrade_scheduler.add_job(
-        scheduled_market_analysis, "interval", minutes=5,
-        kwargs={"context": app, "interval_minutes": 5},
-        id="market_analysis_5m", replace_existing=True
-    )
-    autotrade_scheduler.add_job(
-        scheduled_market_analysis, "interval", minutes=10,
-        kwargs={"context": app, "interval_minutes": 10},
-        id="market_analysis_10m", replace_existing=True
-    )
+    try:
+        analysis_intervals = get_configured_analysis_intervals()
+    except Exception as e:
+        logger.warning(f"Analysis interval discovery failed, using defaults: {e}")
+        analysis_intervals = [5, 10]
+
+    for interval in analysis_intervals:
+        autotrade_scheduler.add_job(
+            scheduled_market_analysis, "interval", minutes=interval,
+            kwargs={"context": app, "interval_minutes": interval},
+            id=f"market_analysis_{interval}m", replace_existing=True
+        )
     autotrade_scheduler.add_job(
         monitor_open_positions, "interval", seconds=15,
         kwargs={"context": app},
         id="monitor_open_positions", replace_existing=True
     )
+    autotrade_scheduler.add_job(
+        reconcile_all_accounts, "interval", minutes=1,
+        kwargs={"context": app},
+        id="reconcile_all_accounts", replace_existing=True
+    )
+    try:
+        reconcile_all_accounts(context=app)
+    except Exception as e:
+        logger.warning(f"Startup reconciliation failed: {e}")
     autotrade_scheduler.start()
 
 

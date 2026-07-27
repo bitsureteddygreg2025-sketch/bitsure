@@ -7,13 +7,17 @@ Toute la logique de gestion du risque :
 - whitelist / blacklist de symboles
 """
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 from trading_config import TradingConfig, record_daily_loss
-from binance_manager import get_account_balance
+from binance_manager import get_account_balance, get_open_binance_positions, BinanceClientError
 from database import get_connection
+from utils import normalize_symbol
+
+logger = logging.getLogger("risk_manager")
 
 
 @dataclass
@@ -22,7 +26,7 @@ class RiskCheckResult:
     reason: Optional[str] = None
 
 
-def count_open_positions(user_id: int) -> int:
+def count_local_open_positions(user_id: int) -> int:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -33,6 +37,17 @@ def count_open_positions(user_id: int) -> int:
             return cur.fetchone()[0]
     finally:
         conn.close()
+
+
+
+def count_open_positions(user_id: int) -> int:
+    return count_local_open_positions(user_id)
+
+
+def count_remote_open_positions(user_id: int, market_type: str = "futures") -> int:
+    if market_type != "futures":
+        return 0
+    return len(get_open_binance_positions(user_id, market_type=market_type))
 
 
 def get_last_trade_time(user_id: int) -> Optional[float]:
@@ -50,10 +65,11 @@ def get_last_trade_time(user_id: int) -> Optional[float]:
 
 
 def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
-    if config.symbol_blacklist and symbol in config.symbol_blacklist:
-        return RiskCheckResult(False, f"{symbol} est dans ta blacklist.")
-    if config.symbol_whitelist and symbol not in config.symbol_whitelist:
-        return RiskCheckResult(False, f"{symbol} n'est pas dans ta whitelist.")
+    normalized_symbol = normalize_symbol(symbol or "")
+    if config.symbol_blacklist and normalized_symbol in config.symbol_blacklist:
+        return RiskCheckResult(False, f"{normalized_symbol} est dans ta blacklist.")
+    if config.symbol_whitelist and normalized_symbol not in config.symbol_whitelist:
+        return RiskCheckResult(False, f"{normalized_symbol} n'est pas dans ta whitelist.")
     return RiskCheckResult(True)
 
 
@@ -64,7 +80,22 @@ def check_can_open_position(user_id: int, config: TradingConfig, symbol: str) ->
     if not symbol_check.allowed:
         return symbol_check
 
-    open_count = count_open_positions(user_id)
+    local_open_count = count_local_open_positions(user_id)
+    remote_open_count = 0
+    if config.market_type == "futures":
+        try:
+            remote_open_count = count_remote_open_positions(user_id, config.market_type)
+        except BinanceClientError as e:
+            logger.warning("Risk check blocked user=%s: Binance positions unavailable: %s", user_id, e)
+            return RiskCheckResult(False, "Positions Binance impossibles à vérifier, ouverture suspendue par sécurité.")
+        if remote_open_count != local_open_count:
+            logger.warning(
+                "Risk divergence user=%s local_open=%s remote_open=%s",
+                user_id, local_open_count, remote_open_count,
+            )
+            return RiskCheckResult(False, "Divergence positions locales/Binance, ouverture suspendue par sécurité.")
+
+    open_count = max(local_open_count, remote_open_count)
     if open_count >= config.max_positions:
         return RiskCheckResult(
             False, f"Nombre max de positions atteint ({config.max_positions})."

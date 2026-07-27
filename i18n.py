@@ -55,7 +55,7 @@ TEXTS = {
             "/watchlist – Afficher votre liste de suivi\n"
             "/addwatch SYMBOLE – Ajouter à la liste de suivi\n"
             "/removewatch SYMBOLE – Retirer de la liste de suivi\n"
-            "/scan – Scanner la liste de suivi\n\n"
+            "/scan – Scanner manuellement la liste de suivi\n\n"
 
             "📜 *Paper Trading & Historique*\n"
             "/paper [start|status|buy|short|close|history|stats|reset] – Paper trading\n"
@@ -471,7 +471,7 @@ TEXTS = {
             "/watchlist – View your watchlist\n"
             "/addwatch SYMBOL – Add symbol to watchlist\n"
             "/removewatch SYMBOL – Remove symbol from watchlist\n"
-            "/scan – Scan your watchlist\n\n"
+            "/scan – Manually scan your watchlist\n\n"
 
             "📜 *Paper Trading & History*\n"
             "/paper [start|status|buy|short|close|history|stats|reset] – Paper trading\n"
