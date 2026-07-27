@@ -8,16 +8,78 @@ Toute la logique de gestion du risque :
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 from trading_config import TradingConfig, record_daily_loss
-from binance_manager import get_account_balance, get_open_binance_positions, BinanceClientError
+from binance_manager import get_account_balance, get_available_balance, get_open_binance_positions, BinanceClientError
 from database import get_connection
 from utils import normalize_symbol
 
 logger = logging.getLogger("risk_manager")
+MAX_EXPOSURE_PCT = float(os.getenv("MAX_POSITION_EXPOSURE_PCT", "50"))
+MIN_STOP_DISTANCE_PCT = float(os.getenv("MIN_STOP_DISTANCE_PCT", "0.05"))
+
+
+def _log_position_sizing_diagnostics(
+    *,
+    user_id: int,
+    market_type: str,
+    balance: float,
+    risk_pct: float,
+    risk_amount: float | None,
+    leverage: int,
+    entry_price: float,
+    sl_price: float,
+    price_distance: float | None,
+    stop_distance_pct: float | None,
+    quantity: float | None,
+    notional: float | None,
+    max_notional: float | None,
+    available_margin: float | None = None,
+    required_margin: float | None = None,
+    decision: str = "",
+) -> None:
+    logger.info(
+        "===== Position sizing =====\n"
+        "user_id=%s market_type=%s\n"
+        "Balance: %.8f USDT\n"
+        "Capital utilise: %.8f USDT\n"
+        "Risque: %.4f%%\n"
+        "Montant a risquer: %s USDT\n"
+        "Levier: x%s\n"
+        "Entry: %.8f\n"
+        "Stop Loss: %.8f\n"
+        "Distance SL: %s\n"
+        "Distance SL %%: %s\n"
+        "ATR: non fourni a calculate_position_size\n"
+        "Quantite calculee: %s\n"
+        "Notional: %s USDT\n"
+        "Plafond exposition: %s USDT (MAX_POSITION_EXPOSURE_PCT=%.4f%%)\n"
+        "Marge disponible: %s USDT\n"
+        "Marge requise: %s USDT\n"
+        "Decision: %s",
+        user_id,
+        market_type,
+        balance,
+        balance,
+        risk_pct,
+        f"{risk_amount:.8f}" if risk_amount is not None else "N/A",
+        leverage,
+        entry_price,
+        sl_price,
+        f"{price_distance:.8f}" if price_distance is not None else "N/A",
+        f"{stop_distance_pct:.8f}%" if stop_distance_pct is not None else "N/A",
+        f"{quantity:.12f}" if quantity is not None else "N/A",
+        f"{notional:.8f}" if notional is not None else "N/A",
+        f"{max_notional:.8f}" if max_notional is not None else "N/A",
+        MAX_EXPOSURE_PCT,
+        f"{available_margin:.8f}" if available_margin is not None else "N/A",
+        f"{required_margin:.8f}" if required_margin is not None else "N/A",
+        decision,
+    )
 
 
 @dataclass
@@ -38,6 +100,22 @@ def count_local_open_positions(user_id: int) -> int:
     finally:
         conn.close()
 
+
+
+def count_duplicate_open_positions(user_id: int, symbol: str, direction: str) -> int:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM trades
+                WHERE user_id = %s AND status = 'open' AND symbol = %s AND direction = %s
+                """,
+                (user_id, symbol.upper(), direction.upper()),
+            )
+            return cur.fetchone()[0]
+    finally:
+        conn.close()
 
 
 def count_open_positions(user_id: int) -> int:
@@ -73,12 +151,15 @@ def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
     return RiskCheckResult(True)
 
 
-def check_can_open_position(user_id: int, config: TradingConfig, symbol: str) -> RiskCheckResult:
+def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, direction: str | None = None) -> RiskCheckResult:
     """Vérifie toutes les règles de risque avant d'ouvrir une nouvelle position."""
 
     symbol_check = check_symbol_allowed(config, symbol)
     if not symbol_check.allowed:
         return symbol_check
+
+    if direction and count_duplicate_open_positions(user_id, symbol, direction) > 0:
+        return RiskCheckResult(False, f"Une position {direction.upper()} est déjà ouverte sur {symbol.upper()}.")
 
     local_open_count = count_local_open_positions(user_id)
     remote_open_count = 0
@@ -138,16 +219,81 @@ def calculate_position_size(
     (le levier change la marge utilisée, pas la taille notionnelle calculée ici).
     """
     balance = get_account_balance(user_id, market_type=market_type)
+    leverage = max(int(config.leverage or 1), 1)
     if balance <= 0:
+        _log_position_sizing_diagnostics(
+            user_id=user_id, market_type=market_type, balance=balance,
+            risk_pct=config.risk_per_trade, risk_amount=None, leverage=leverage,
+            entry_price=entry_price, sl_price=sl_price, price_distance=None,
+            stop_distance_pct=None, quantity=None, notional=None, max_notional=None,
+            decision="REFUS: solde insuffisant ou introuvable",
+        )
         raise ValueError("Solde insuffisant ou introuvable sur le compte Binance.")
 
     risk_amount = balance * (config.risk_per_trade / 100)
     price_distance = abs(entry_price - sl_price)
 
     if price_distance <= 0:
+        _log_position_sizing_diagnostics(
+            user_id=user_id, market_type=market_type, balance=balance,
+            risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
+            entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
+            stop_distance_pct=None, quantity=None, notional=None,
+            max_notional=balance * (MAX_EXPOSURE_PCT / 100),
+            decision="REFUS: distance SL nulle",
+        )
         raise ValueError("SL invalide : distance nulle avec le prix d'entrée.")
+    stop_distance_pct = (price_distance / entry_price) * 100 if entry_price else 0
+    if stop_distance_pct < MIN_STOP_DISTANCE_PCT:
+        _log_position_sizing_diagnostics(
+            user_id=user_id, market_type=market_type, balance=balance,
+            risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
+            entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
+            stop_distance_pct=stop_distance_pct, quantity=None, notional=None,
+            max_notional=balance * (MAX_EXPOSURE_PCT / 100),
+            decision="REFUS: SL trop serre",
+        )
+        raise ValueError(f"SL trop serré ({stop_distance_pct:.4f}%). Minimum configuré: {MIN_STOP_DISTANCE_PCT}%.")
 
     quantity = risk_amount / price_distance
+    notional = quantity * entry_price
+    max_notional = balance * (MAX_EXPOSURE_PCT / 100)
+    if notional > max_notional:
+        _log_position_sizing_diagnostics(
+            user_id=user_id, market_type=market_type, balance=balance,
+            risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
+            entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
+            stop_distance_pct=stop_distance_pct, quantity=quantity, notional=notional,
+            max_notional=max_notional,
+            decision="REFUS: exposition superieure au plafond",
+        )
+        raise ValueError(f"Exposition trop élevée ({notional:.2f} USDT > plafond {max_notional:.2f} USDT).")
+
+    available = None
+    required_margin = None
+    if market_type == "futures":
+        available = get_available_balance(user_id, market_type=market_type)
+        required_margin = notional / leverage
+        if required_margin > available:
+            _log_position_sizing_diagnostics(
+                user_id=user_id, market_type=market_type, balance=balance,
+                risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
+                entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
+                stop_distance_pct=stop_distance_pct, quantity=quantity, notional=notional,
+                max_notional=max_notional, available_margin=available,
+                required_margin=required_margin,
+                decision="REFUS: marge disponible insuffisante",
+            )
+            raise ValueError(f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT).")
+
+    _log_position_sizing_diagnostics(
+        user_id=user_id, market_type=market_type, balance=balance,
+        risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
+        entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
+        stop_distance_pct=stop_distance_pct, quantity=quantity, notional=notional,
+        max_notional=max_notional, available_margin=available,
+        required_margin=required_margin, decision="ACCEPTE",
+    )
     return quantity
 
 

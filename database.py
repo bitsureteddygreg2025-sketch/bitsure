@@ -1,12 +1,15 @@
 import atexit
 import os
 import threading
+from contextlib import contextmanager
 
 import psycopg2
 from psycopg2.extras import DictCursor
+from psycopg2.pool import ThreadedConnectionPool
 
-_conn = None
-_lock = threading.RLock()
+_pool = None
+_pool_lock = threading.RLock()
+_thread_state = threading.local()
 
 
 def _load_database_url():
@@ -29,15 +32,65 @@ def _load_database_url():
     return None
 
 
-class PostgresConnection:
-    """Small compatibility wrapper for the existing manager classes."""
+def _get_pool() -> ThreadedConnectionPool:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            database_url = _load_database_url()
+            if not database_url:
+                raise RuntimeError("DATABASE_URL is required for PostgreSQL access")
+            minconn = int(os.getenv("DB_POOL_MINCONN", "1"))
+            maxconn = int(os.getenv("DB_POOL_MAXCONN", "10"))
+            _pool = ThreadedConnectionPool(minconn, maxconn, database_url, cursor_factory=DictCursor)
+            with pooled_connection() as conn:
+                _ensure_schema(PostgresConnection(conn))
+        return _pool
 
-    def __init__(self, database_url):
-        self._conn = psycopg2.connect(database_url, cursor_factory=DictCursor)
-        self._conn.autocommit = False
+
+@contextmanager
+def pooled_connection():
+    pool = _pool
+    if pool is None:
+        database_url = _load_database_url()
+        if not database_url:
+            raise RuntimeError("DATABASE_URL is required for PostgreSQL access")
+        conn = psycopg2.connect(database_url, cursor_factory=DictCursor)
+        conn.autocommit = False
+        try:
+            yield conn
+        finally:
+            conn.close()
+        return
+
+    conn = pool.getconn()
+    conn.autocommit = False
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+class PostgresConnection:
+    """Compatibility wrapper that never shares a psycopg2 connection across threads."""
+
+    def __init__(self, conn=None):
+        self._schema_conn = conn
+
+    def _conn(self):
+        if self._schema_conn is not None:
+            return self._schema_conn
+        conn = getattr(_thread_state, "conn", None)
+        if conn is None or getattr(conn, "closed", True):
+            conn = _get_pool().getconn()
+            conn.autocommit = False
+            _thread_state.conn = conn
+        return conn
 
     def execute(self, sql, params=None):
-        cursor = self._conn.cursor()
+        cursor = self._conn().cursor()
         try:
             cursor.execute(sql, params or ())
             return cursor
@@ -47,47 +100,58 @@ class PostgresConnection:
             raise
 
     def cursor(self):
-        return self._conn.cursor()
+        return self._conn().cursor()
 
     def commit(self):
-        self._conn.commit()
+        self._conn().commit()
 
     def rollback(self):
-        self._conn.rollback()
+        self._conn().rollback()
 
     def close(self):
-        self._conn.close()
+        conn = getattr(_thread_state, "conn", None)
+        if conn is not None:
+            _get_pool().putconn(conn)
+            _thread_state.conn = None
 
 
 def get_connection():
-    """Return a new psycopg2 connection for individual queries/transactions that manage their own lifecycle."""
-    database_url = _load_database_url()
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is required for PostgreSQL access")
-    conn = psycopg2.connect(database_url)
+    """Return a dedicated pooled connection for one operation/transaction."""
+    conn = _get_pool().getconn()
     conn.autocommit = False
-    return conn
+    return _PooledRawConnection(conn)
+
+
+class _PooledRawConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def close(self):
+        if self._conn is not None:
+            _get_pool().putconn(self._conn)
+            self._conn = None
 
 
 def get_db():
-    """Return a persistent PostgreSQL connection backed by DATABASE_URL."""
-    global _conn
-    with _lock:
-        if _conn is None:
-            database_url = _load_database_url()
-            if not database_url:
-                raise RuntimeError("DATABASE_URL is required for PostgreSQL access")
-            _conn = PostgresConnection(database_url)
-            _ensure_schema(_conn)
-        return _conn
+    """Return a thread-local PostgreSQL compatibility connection."""
+    _get_pool()
+    return PostgresConnection()
 
 
 def close_db():
-    global _conn
-    with _lock:
-        if _conn is not None:
-            _conn.close()
-            _conn = None
+    global _pool
+    with _pool_lock:
+        conn = getattr(_thread_state, "conn", None)
+        if conn is not None and _pool is not None:
+            _pool.putconn(conn)
+            _thread_state.conn = None
+        if _pool is not None:
+            _pool.closeall()
+            _pool = None
+
 
 
 def _ensure_schema(conn):
@@ -271,6 +335,16 @@ def _ensure_schema(conn):
             testnet BOOLEAN DEFAULT TRUE,
             is_valid BOOLEAN DEFAULT TRUE,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_security_codes (
+            user_id BIGINT PRIMARY KEY,
+            code_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            failed_attempts INT DEFAULT 0,
+            locked_until DOUBLE PRECISION,
+            updated_at DOUBLE PRECISION
         )
         """,
         """
