@@ -179,12 +179,6 @@ def update_config(user_id: int, **fields) -> TradingConfig:
     if not fields:
         return get_config(user_id)
 
-    critical_changed = bool(CRITICAL_AUTOTRADE_FIELDS.intersection(fields))
-    if critical_changed and fields.get("auto_trade") is not True:
-        fields.setdefault("auto_trade", False)
-        fields.setdefault("periodic_analysis_enabled", False)
-        logger.warning("AutoTrade suspended after critical config change user=%s fields=%s", user_id, sorted(CRITICAL_AUTOTRADE_FIELDS.intersection(fields)))
-
     allowed = set(asdict(TradingConfig(user_id=0)).keys()) - {"user_id"}
     set_clauses = []
     values = []

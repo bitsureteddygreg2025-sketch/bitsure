@@ -66,6 +66,9 @@ binance_manager_stub.close_position = lambda *a, **k: {"order_id": "close"}
 binance_manager_stub.cancel_order = lambda *a, **k: None
 binance_manager_stub.get_open_binance_positions = lambda *a, **k: []
 binance_manager_stub.get_open_binance_orders = lambda *a, **k: []
+binance_manager_stub.ORDER_CONTEXT_AUTOTRADE = "autotrade"
+binance_manager_stub.ORDER_CONTEXT_MANUAL_AUTHENTICATED = "manual_authenticated"
+binance_manager_stub.ORDER_CONTEXT_EMERGENCY = "emergency_stop"
 sys.modules.setdefault("binance_manager", binance_manager_stub)
 
 risk_manager_stub = types.ModuleType("risk_manager")
@@ -168,6 +171,29 @@ class TradingSafetyTests(unittest.TestCase):
 
         safe_mode.assert_called_once()
         close_position.assert_not_called()
+
+    def test_update_config_preserves_enabled_states(self):
+        from trading_config import update_config, TradingConfig
+
+        # Mock DB connection for update_config test
+        class DummyCursor:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def execute(self, *args, **kwargs): pass
+            def fetchone(self):
+                # row matching TradingConfig fields
+                return (42, True, 1, 1.0, 3, 70, 5.0, False, 1.0, False, 1, 1.0, "", "", "futures", "day", "1h", 5, False, 0, 0.0, True, False, None, None)
+
+        class DummyConn:
+            def cursor(self): return DummyCursor()
+            def commit(self): pass
+            def close(self): pass
+
+        with patch("trading_config.get_connection", return_value=DummyConn()), \
+             patch("trading_config.ensure_config_row", return_value=None):
+            updated = update_config(42, analysis_interval_minutes=10)
+            self.assertTrue(updated.auto_trade)
+            self.assertTrue(updated.periodic_analysis_enabled)
 
 
 if __name__ == "__main__":
