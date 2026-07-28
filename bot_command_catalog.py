@@ -107,15 +107,58 @@ ADMIN_COMMAND_CATEGORIES = [
 ]
 
 
-def render_help(*, include_admin: bool = False) -> str:
+HELP_FOOTER = "🔐 Les commandes contenant un code ou des clés doivent être envoyées en privé. Le bot tente de supprimer automatiquement le message après traitement."
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3500
+
+
+def _help_categories(*, include_admin: bool = False):
     categories = list(USER_COMMAND_CATEGORIES)
     if include_admin:
         categories += ADMIN_COMMAND_CATEGORIES
-    lines = ["📚 *Commandes disponibles*", ""]
-    for title, commands in categories:
-        lines.append(f"*{title}*")
-        for usage, description in commands:
-            lines.append(f"`{usage}` — {description}")
-        lines.append("")
-    lines.append("🔐 Les commandes contenant un code ou des clés doivent être envoyées en privé. Le bot tente de supprimer automatiquement le message après traitement.")
-    return "\n".join(lines).strip()
+    return categories
+
+
+def render_help_pages(*, include_admin: bool = False, max_chars: int = TELEGRAM_SAFE_MESSAGE_LIMIT) -> list[str]:
+    """Render /help as Telegram-safe Markdown pages.
+
+    Telegram rejects messages over 4096 characters. Keep a lower ceiling so
+    trial text or future command descriptions cannot make /help fail at send
+    time. Category blocks are kept intact unless a single future category grows
+    beyond max_chars, in which case it is split by command line.
+    """
+    pages: list[str] = []
+    current = "📚 *Commandes disponibles*"
+
+    def flush_current():
+        nonlocal current
+        if current.strip():
+            pages.append(current.strip())
+        current = ""
+
+    def append_block(block: str):
+        nonlocal current
+        separator = "\n\n" if current else ""
+        if current and len(current) + len(separator) + len(block) > max_chars:
+            flush_current()
+        current = f"{current}{separator}{block}" if current else block
+
+    for title, commands in _help_categories(include_admin=include_admin):
+        header = f"*{title}*"
+        lines = [header] + [f"`{usage}` — {description}" for usage, description in commands]
+        block = "\n".join(lines)
+        if len(block) <= max_chars:
+            append_block(block)
+            continue
+
+        append_block(header)
+        for line in lines[1:]:
+            append_block(line)
+
+    append_block(HELP_FOOTER)
+    if current.strip():
+        pages.append(current.strip())
+    return pages
+
+
+def render_help(*, include_admin: bool = False) -> str:
+    return "\n\n".join(render_help_pages(include_admin=include_admin))
