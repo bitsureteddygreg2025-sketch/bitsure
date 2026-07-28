@@ -661,7 +661,6 @@ async def terms_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @check_limit
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from bot_command_catalog import render_help
     lang = get_user_lang(update)
     user_id = update.effective_user.id
     trial_msg = ""
@@ -673,9 +672,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trial_days = max(0, int((trial_end - time.time()) / 86400))
         trial_msg = "\n\n" + get_text(lang, "trial_days_left", days=trial_days)
     
-    help_text = render_help(include_admin=user_mgr.is_admin(user_id))
-    full_msg = help_text + trial_msg
-    await update.message.reply_text(full_msg, parse_mode=ParseMode.MARKDOWN)
+    from bot_command_catalog import render_help_pages
+    help_pages = render_help_pages(include_admin=user_mgr.is_admin(user_id))
+    if trial_msg and help_pages:
+        help_pages[-1] = help_pages[-1] + trial_msg
+    for page in help_pages:
+        await update.message.reply_text(page, parse_mode=ParseMode.MARKDOWN)
 
 @check_limit
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
