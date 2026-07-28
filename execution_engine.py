@@ -28,7 +28,6 @@ from trading_logger import get_trading_logger, log_trade_opened, log_error
 from trading_safety import (
     SafetyError,
     assert_trading_allowed,
-    engage_safe_mode,
     mark_signal_refused,
     reserve_signal_for_execution,
     validate_signal_freshness,
@@ -214,8 +213,6 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
         fields["error_message"] = str(e)
         log_error(logger, user_id, "execute_signal", str(e))
         mark_signal_status(signal["id"], "error")
-        if isinstance(e, BinanceClientError):
-            engage_safe_mode(user_id, f"Échec ouverture Binance: {e}")
 
     trade_id = insert_trade_row(**fields)
     fields["id"] = trade_id

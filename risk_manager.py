@@ -176,10 +176,9 @@ def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, di
             return RiskCheckResult(False, "Positions Binance impossibles à vérifier, ouverture suspendue par sécurité.")
         if remote_open_count != local_open_count:
             logger.warning(
-                "Risk divergence user=%s local_open=%s remote_open=%s",
+                "Risk divergence user=%s local_open=%s remote_open=%s — blocking new position opening",
                 user_id, local_open_count, remote_open_count,
             )
-            engage_safe_mode(user_id, f"Divergence positions local={local_open_count} binance={remote_open_count}")
             return RiskCheckResult(False, "Divergence positions locales/Binance, ouverture suspendue par sécurité.")
 
     open_count = max(local_open_count, remote_open_count)

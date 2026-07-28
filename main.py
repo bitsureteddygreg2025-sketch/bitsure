@@ -166,7 +166,7 @@ def start_autotrade_scheduler(app):
         id="reconcile_all_accounts", replace_existing=True
     )
     try:
-        reconcile_all_accounts(context=app)
+        reconcile_all_accounts(context=app, startup_mode=True)
     except Exception as e:
         logger.warning(f"Startup reconciliation failed: {e}")
     autotrade_scheduler.start()

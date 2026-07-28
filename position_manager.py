@@ -150,8 +150,15 @@ def _trade_key(trade: dict) -> tuple[str, str]:
     return (trade["symbol"], trade["direction"])
 
 
-def reconcile_user_positions(user_id: int) -> dict:
-    """Reconcile local open futures trades with real Binance positions/orders."""
+def reconcile_user_positions(user_id: int, startup_mode: bool = False) -> dict:
+    """Reconcile local open futures trades with real Binance positions/orders.
+
+    Args:
+        startup_mode: When True (used at bot startup), Binance positions with no
+            local record are only logged — safe mode is NOT triggered.  This
+            avoids permanently disabling AutoTrade because of pre-existing manual
+            positions or leftover positions from a previous bot session.
+    """
     local_trades = [t for t in get_open_trades(user_id) if t["market_type"] == "futures"]
     if not local_trades:
         local_by_key = {}
@@ -185,8 +192,16 @@ def reconcile_user_positions(user_id: int) -> dict:
             logger, user_id, "reconcile.missing_local",
             f"Positions Binance sans trade local: {missing_local}",
         )
-        engage_safe_mode(user_id, f"Positions Binance sans trade local: {missing_local}")
-        reject_pending_trading_signals(user_id)
+        if startup_mode:
+            # At startup, orphaned Binance positions are simply pre-existing (manual
+            # trades, previous session).  Only log — do not lock the user out.
+            logger.warning(
+                "reconcile startup_mode user=%s: ignoring %d orphaned Binance position(s) %s",
+                user_id, len(missing_local), missing_local,
+            )
+        else:
+            engage_safe_mode(user_id, f"Positions Binance sans trade local: {missing_local}")
+            reject_pending_trading_signals(user_id)
 
     try:
         open_orders = get_open_binance_orders(user_id, market_type="futures")
@@ -231,11 +246,11 @@ def _active_trading_user_ids() -> list[int]:
         conn.close()
 
 
-def reconcile_all_accounts(context=None) -> list[dict]:
+def reconcile_all_accounts(context=None, startup_mode: bool = False) -> list[dict]:
     reports = []
     for user_id in _active_trading_user_ids():
         try:
-            reports.append(reconcile_user_positions(user_id))
+            reports.append(reconcile_user_positions(user_id, startup_mode=startup_mode))
         except BinanceClientError as e:
             log_error(logger, user_id, "reconcile_all", str(e))
         except Exception as e:
