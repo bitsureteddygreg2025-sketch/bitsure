@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import time
+import hashlib
 from dataclasses import dataclass
 from typing import Optional
 
@@ -28,6 +29,7 @@ from database import get_connection
 from trading_config import get_config
 from risk_manager import check_can_open_position
 from trading_logger import get_trading_logger
+from trading_safety import SafetyError, assert_trading_allowed, engage_safe_mode
 from utils import normalize_symbol
 
 logger = get_trading_logger("live_trader")
@@ -132,9 +134,14 @@ def validate_draft(user_id: int, draft: LiveOrderDraft) -> dict:
         raise BinanceClientError("Le montant doit être supérieur à 0.")
 
     config = get_config(user_id)
-    risk_check = check_can_open_position(user_id, config, draft.symbol)
-    if not risk_check.allowed:
-        raise BinanceClientError(risk_check.reason or "Règle de risque non respectée.")
+    try:
+        assert_trading_allowed(config)
+    except SafetyError as e:
+        raise BinanceClientError(str(e))
+    if not draft.reduce_only:
+        risk_check = check_can_open_position(user_id, config, draft.symbol, draft.side)
+        if not risk_check.allowed:
+            raise BinanceClientError(risk_check.reason or "Règle de risque non respectée.")
 
     client = _client_for_user(user_id)
     max_leverage = _get_max_leverage(client, draft.symbol) if draft.market_type == "futures" else 1
@@ -184,6 +191,9 @@ def execute_draft(user_id: int, draft: LiveOrderDraft) -> dict:
     client = _client_for_user(user_id)
     result = {"checks": checks}
     opposite = "SELL" if draft.side == "BUY" else "BUY"
+    client_order_id = "live_" + hashlib.sha256(
+        f"{user_id}:{draft.symbol}:{draft.side}:{draft.amount}:{draft.sl_price}:{draft.tp_price}:{int(time.time() // 60)}".encode()
+    ).hexdigest()[:24]
 
     try:
         if draft.market_type == "futures":
@@ -198,6 +208,7 @@ def execute_draft(user_id: int, draft: LiveOrderDraft) -> dict:
                 "side": draft.side,
                 "type": draft.order_type,
                 "quantity": checks["quantity"],
+                "newClientOrderId": client_order_id,
             }
             if draft.order_type == "LIMIT":
                 params.update({"price": checks["entry_price"], "timeInForce": "GTC"})
@@ -220,14 +231,17 @@ def execute_draft(user_id: int, draft: LiveOrderDraft) -> dict:
                 order = client.create_order(
                     symbol=draft.symbol, side=draft.side, type="LIMIT",
                     quantity=checks["quantity"], price=checks["entry_price"], timeInForce="GTC",
+                    newClientOrderId=client_order_id,
                 )
             else:
                 order = client.create_order(
-                    symbol=draft.symbol, side=draft.side, type="MARKET", quantity=checks["quantity"]
+                    symbol=draft.symbol, side=draft.side, type="MARKET", quantity=checks["quantity"],
+                    newClientOrderId=client_order_id,
                 )
             result["order"] = order
     except (BinanceAPIException, BinanceOrderException) as e:
         logger.warning("Live order failed user=%s symbol=%s: %s", user_id, draft.symbol, getattr(e, "message", str(e)))
+        engage_safe_mode(user_id, f"Échec ordre live Binance: {getattr(e, 'message', str(e))}")
         raise BinanceClientError(f"Erreur Binance Live Trading : {getattr(e, 'message', str(e))}")
 
     _save_live_trade(user_id, draft, result)

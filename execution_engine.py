@@ -25,6 +25,14 @@ from binance_manager import (
 from history_manager import HistoryManager
 from signal_engine import SignalEngine
 from trading_logger import get_trading_logger, log_trade_opened, log_error
+from trading_safety import (
+    SafetyError,
+    assert_trading_allowed,
+    engage_safe_mode,
+    mark_signal_refused,
+    reserve_signal_for_execution,
+    validate_signal_freshness,
+)
 
 logger = get_trading_logger("execution_engine")
 
@@ -36,14 +44,18 @@ def fetch_pending_signals():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, user_id, symbol, direction, entry_price, sl, tp, score
+                SELECT id, user_id, symbol, direction, entry_price, sl, tp, score,
+                       timeframe, signal_type, created_at
                 FROM signals
                 WHERE status IN ('pending', 'active')
                   AND direction IN ('BUY', 'SELL')
                 ORDER BY id ASC
                 """
             )
-            cols = ["id", "user_id", "symbol", "direction", "entry_price", "sl", "tp", "score"]
+            cols = [
+                "id", "user_id", "symbol", "direction", "entry_price", "sl", "tp", "score",
+                "timeframe", "signal_type", "created_at",
+            ]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
         conn.close()
@@ -62,6 +74,14 @@ def mark_signal_status(signal_id: str, status: str):
 
 def validate_signal_for_execution(user_id: int, signal: dict, config: TradingConfig) -> tuple[bool, str | None]:
     """Applique les garde-fous juste avant toute ouverture de position."""
+    try:
+        require_auto = signal.get("status") in ("pending", "active") or signal.get("signal_type") == "market_scan"
+        assert_trading_allowed(config, require_auto_trade=require_auto)
+        if signal.get("id") and not str(signal["id"]).startswith("manual-"):
+            validate_signal_freshness(signal)
+    except SafetyError as e:
+        return False, str(e)
+
     if int(signal["user_id"]) != int(user_id):
         return False, "Ce signal ne t'appartient pas."
 
@@ -142,6 +162,20 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
     Retourne le dict de la ligne insérée (utile pour notifier l'utilisateur).
     """
     user_id = signal["user_id"]
+    if signal.get("id") and not str(signal["id"]).startswith("manual-"):
+        try:
+            allowed_statuses = ("awaiting_confirmation",) if signal.get("status") == "awaiting_confirmation" else ("pending", "active")
+            signal = reserve_signal_for_execution(signal["id"], user_id, allowed_statuses)
+            allowed, reason = validate_signal_for_execution(user_id, signal, config)
+            if not allowed:
+                mark_signal_refused(signal["id"], reason or "Validation refusée")
+                raise SafetyError(reason or "Validation refusée")
+        except SafetyError as e:
+            fields = _default_trade_fields(signal, config)
+            fields["error_message"] = str(e)
+            fields["status"] = "skipped"
+            return fields
+
     symbol = signal["symbol"]
     direction = signal["direction"]
     fields = _default_trade_fields(signal, config)
@@ -179,6 +213,8 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
         fields["error_message"] = str(e)
         log_error(logger, user_id, "execute_signal", str(e))
         mark_signal_status(signal["id"], "error")
+        if isinstance(e, BinanceClientError):
+            engage_safe_mode(user_id, f"Échec ouverture Binance: {e}")
 
     trade_id = insert_trade_row(**fields)
     fields["id"] = trade_id

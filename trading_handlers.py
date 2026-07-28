@@ -120,6 +120,20 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(NO_KEYS_MESSAGE)
         return
 
+    if context.args and context.args[0].lower() in ("on", "off"):
+        desired = context.args[0].lower() == "on"
+        if desired:
+            ok, msg = _sensitive_authorized(user_id, context)
+            if not ok:
+                await update.message.reply_text(f"🔐 {msg}")
+                return
+            update_config(user_id, auto_trade=True, safety_lock=False, safety_lock_reason=None, safety_lock_at=None)
+            await update.message.reply_text("✅ AutoTrade activé après validation du code de sécurité.")
+        else:
+            update_config(user_id, auto_trade=False)
+            await update.message.reply_text("❌ AutoTrade désactivé.")
+        return
+
     text, keyboard = _build_autotrade_menu(user_id)
     await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
@@ -348,6 +362,10 @@ async def cmd_setrisk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     if not context.args:
         await update.message.reply_text("Usage : /whitelist <SYMBOLE>")
         return
@@ -360,6 +378,10 @@ async def cmd_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
     if not context.args:
         await update.message.reply_text("Usage : /blacklist <SYMBOLE>")
         return
@@ -431,7 +453,14 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data == "toggle_autotrade":
         config = get_config(user_id)
-        update_config(user_id, auto_trade=not config.auto_trade)
+        if config.auto_trade:
+            update_config(user_id, auto_trade=False)
+        else:
+            await query.edit_message_text(
+                "🔐 Activation AutoTrade refusée depuis un bouton non authentifié.\n"
+                "Utilise une commande protégée avec code de sécurité avant d'activer le trading réel."
+            )
+            return
         query.data = "menu_autotrade"
         await trading_callback_router(update, context)
 
@@ -457,6 +486,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("set_market_"):
+        await query.edit_message_text("🔐 Changement de marché refusé depuis un bouton non authentifié. Utilise une commande protégée.")
+        return
         market_type = data.replace("set_market_", "")
         if market_type not in ("spot", "futures"):
             await query.edit_message_text("Mode de marché invalide.")
@@ -508,12 +539,17 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     elif data == "toggle_periodic_analysis":
         config = get_config(user_id)
-        new_val = not config.periodic_analysis_enabled
-        update_config(user_id, periodic_analysis_enabled=new_val)
-        query.data = "menu_analysis_config"
-        await trading_callback_router(update, context)
+        if config.periodic_analysis_enabled:
+            update_config(user_id, periodic_analysis_enabled=False)
+            query.data = "menu_analysis_config"
+            await trading_callback_router(update, context)
+        else:
+            await query.edit_message_text("🔐 Activation de l'analyse périodique refusée depuis un bouton non authentifié.")
+        return
 
     elif data.startswith("set_analysis_interval_"):
+        await query.edit_message_text("🔐 Changement d'intervalle refusé depuis un bouton non authentifié.")
+        return
         interval = int(data.replace("set_analysis_interval_", ""))
         if interval not in (5, 10):
             await query.edit_message_text("Intervalle invalide.")
@@ -523,6 +559,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await trading_callback_router(update, context)
 
     elif data.startswith("set_analysis_tf_"):
+        await query.edit_message_text("🔐 Changement de timeframe refusé depuis un bouton non authentifié.")
+        return
         timeframe = data.replace("set_analysis_tf_", "")
         if timeframe not in ("5m", "15m", "1h", "4h", "1d"):
             await query.edit_message_text("Timeframe invalide.")
@@ -532,6 +570,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await trading_callback_router(update, context)
 
     elif data.startswith("set_analysis_style_"):
+        await query.edit_message_text("🔐 Changement de style refusé depuis un bouton non authentifié.")
+        return
         style = data.replace("set_analysis_style_", "")
         if style not in ("scalping", "scalping_15m", "day", "swing", "position"):
             await query.edit_message_text("Style de trading invalide.")
@@ -620,10 +660,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("set_leverage_"):
-        leverage = int(data.replace("set_leverage_", ""))
-        update_config(user_id, leverage=leverage)
-        query.data = "menu_leverage"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement de levier refusé depuis un bouton non authentifié. Utilise /setleverage <valeur> <code>.")
+        return
 
     elif data == "menu_risk":
         config = get_config(user_id)
@@ -643,10 +681,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("set_risk_"):
-        risk = float(data.replace("set_risk_", ""))
-        update_config(user_id, risk_per_trade=risk)
-        query.data = "menu_risk"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement de risque refusé depuis un bouton non authentifié. Utilise /setrisk <pourcentage> <code>.")
+        return
 
     elif data == "menu_maxpos":
         config = get_config(user_id)
@@ -666,10 +702,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("set_maxpos_"):
-        maxpos = int(data.replace("set_maxpos_", ""))
-        update_config(user_id, max_positions=maxpos)
-        query.data = "menu_maxpos"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement du nombre max de positions refusé depuis un bouton non authentifié.")
+        return
 
     elif data == "menu_minscore":
         config = get_config(user_id)
@@ -689,10 +723,8 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("set_minscore_"):
-        minscore = int(data.replace("set_minscore_", ""))
-        update_config(user_id, min_score=minscore)
-        query.data = "menu_minscore"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement du score minimum refusé depuis un bouton non authentifié.")
+        return
 
     elif data == "menu_trailing":
         config = get_config(user_id)
@@ -715,16 +747,12 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data == "toggle_trailing":
-        config = get_config(user_id)
-        update_config(user_id, trailing_stop=not config.trailing_stop)
-        query.data = "menu_trailing"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement du trailing stop refusé depuis un bouton non authentifié.")
+        return
 
     elif data.startswith("set_trailing_"):
-        pct = float(data.replace("set_trailing_", ""))
-        update_config(user_id, trailing_stop_pct=pct)
-        query.data = "menu_trailing"
-        await trading_callback_router(update, context)
+        await query.edit_message_text("🔐 Changement du trailing stop refusé depuis un bouton non authentifié.")
+        return
 
     elif data == "menu_whitelist":
         config = get_config(user_id)

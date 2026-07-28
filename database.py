@@ -320,6 +320,9 @@ def _ensure_schema(conn):
             cooldown_seconds INT DEFAULT 0,
             daily_loss_accum DOUBLE PRECISION DEFAULT 0.0,
             daily_loss_reset_at DOUBLE PRECISION,
+            safety_lock BOOLEAN DEFAULT FALSE,
+            safety_lock_reason TEXT,
+            safety_lock_at DOUBLE PRECISION,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -327,6 +330,9 @@ def _ensure_schema(conn):
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS trading_style TEXT DEFAULT 'day'",
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_timeframe TEXT DEFAULT '1h'",
         "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS analysis_interval_minutes INT DEFAULT 5",
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS safety_lock BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS safety_lock_reason TEXT",
+        "ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS safety_lock_at DOUBLE PRECISION",
         """
         CREATE TABLE IF NOT EXISTS binance_credentials (
             user_id BIGINT PRIMARY KEY,

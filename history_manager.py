@@ -89,8 +89,32 @@ class HistoryManager:
             return None
 
         direction = (direction or "").upper()
-        signal_id = hashlib.md5(f"{symbol}{direction}{price}{timeframe}{time.time()}".encode()).hexdigest()[:8]
         now = time.time()
+        symbol = symbol.upper()
+        duplicate_window = 900
+        duplicate = self.conn.execute(
+            """
+            SELECT id FROM signals
+            WHERE user_id = %s
+              AND symbol = %s
+              AND direction = %s
+              AND timeframe = %s
+              AND signal_type = %s
+              AND status IN ('pending', 'active', 'awaiting_confirmation', 'processing', 'executed')
+              AND created_at >= %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id, symbol, direction, timeframe, signal_type, now - duplicate_window),
+        ).fetchone()
+        if duplicate:
+            logger.warning(
+                "Duplicate signal ignored user=%s symbol=%s direction=%s timeframe=%s signal_type=%s existing=%s",
+                user_id, symbol, direction, timeframe, signal_type, duplicate["id"],
+            )
+            return None
+
+        signal_id = hashlib.md5(f"{user_id}{symbol}{direction}{price}{timeframe}{now}".encode()).hexdigest()[:12]
         validation_status = (validation_status or "VALIDATED").upper()
         status = "pending" if validation_status == "VALIDATED" and direction in ("BUY", "SELL") else "rejected"
         params_snapshot = dict(params_used or {})
@@ -134,7 +158,7 @@ class HistoryManager:
                 user_id = excluded.user_id
             """,
             (
-                signal_id, symbol.upper(), direction, price, sl, tp, score, status,
+                signal_id, symbol, direction, price, sl, tp, score, status,
                 validation_status, validation_reason, rejection_reason, None, None, pnl,
                 capital_before, capital_after, timeframe, signal_type,
                 rr_ratio, asset_class, params_json, now, user_id

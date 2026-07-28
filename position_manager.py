@@ -18,6 +18,7 @@ from binance_manager import (
     get_open_binance_orders, BinanceClientError,
 )
 from trading_logger import get_trading_logger, log_trade_closed, log_error
+from trading_safety import engage_safe_mode
 
 logger = get_trading_logger("position_manager")
 
@@ -184,7 +185,7 @@ def reconcile_user_positions(user_id: int) -> dict:
             logger, user_id, "reconcile.missing_local",
             f"Positions Binance sans trade local: {missing_local}",
         )
-        update_config(user_id, auto_trade=False, periodic_analysis_enabled=False)
+        engage_safe_mode(user_id, f"Positions Binance sans trade local: {missing_local}")
         reject_pending_trading_signals(user_id)
 
     try:
@@ -198,6 +199,7 @@ def reconcile_user_positions(user_id: int) -> dict:
                         logger, user_id, f"reconcile.{field}",
                         f"Ordre protecteur absent côté Binance pour trade {trade['id']}: {oid}",
                     )
+                    engage_safe_mode(user_id, f"Ordre protecteur absent pour trade {trade['id']}")
     except BinanceClientError as e:
         log_error(logger, user_id, "reconcile.orders", str(e))
 
@@ -329,6 +331,21 @@ def close_trade_manual(trade_id: int, user_id: int) -> dict:
     cols = ["id", "user_id", "symbol", "direction", "entry_price", "sl_price",
             "tp_price", "quantity", "leverage", "market_type", "sl_order_id", "tp_order_id"]
     trade = dict(zip(cols, row))
+
+    if trade["market_type"] == "futures":
+        remote_positions = get_open_binance_positions(user_id, market_type="futures")
+        remote = next(
+            (
+                p for p in remote_positions
+                if p["symbol"] == trade["symbol"]
+                and p["direction"] == trade["direction"]
+                and abs(float(p["quantity"]) - float(trade["quantity"])) <= max(float(trade["quantity"]) * 0.001, 1e-12)
+            ),
+            None,
+        )
+        if not remote:
+            engage_safe_mode(user_id, f"Fermeture refusée: position Binance non conforme pour trade {trade_id}")
+            raise ValueError("Fermeture refusée: position Binance correspondante introuvable ou taille différente.")
 
     current_price = get_price(user_id, trade["symbol"], trade["market_type"])
     close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"])

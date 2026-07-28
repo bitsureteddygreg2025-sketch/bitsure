@@ -17,6 +17,7 @@ from trading_config import TradingConfig, record_daily_loss
 from binance_manager import get_account_balance, get_available_balance, get_open_binance_positions, BinanceClientError
 from database import get_connection
 from utils import normalize_symbol
+from trading_safety import SafetyError, assert_trading_allowed, engage_safe_mode
 
 logger = logging.getLogger("risk_manager")
 MAX_EXPOSURE_PCT = float(os.getenv("MAX_POSITION_EXPOSURE_PCT", "50"))
@@ -153,6 +154,10 @@ def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
 
 def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, direction: str | None = None) -> RiskCheckResult:
     """Vérifie toutes les règles de risque avant d'ouvrir une nouvelle position."""
+    try:
+        assert_trading_allowed(config)
+    except SafetyError as e:
+        return RiskCheckResult(False, str(e))
 
     symbol_check = check_symbol_allowed(config, symbol)
     if not symbol_check.allowed:
@@ -174,6 +179,7 @@ def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, di
                 "Risk divergence user=%s local_open=%s remote_open=%s",
                 user_id, local_open_count, remote_open_count,
             )
+            engage_safe_mode(user_id, f"Divergence positions local={local_open_count} binance={remote_open_count}")
             return RiskCheckResult(False, "Divergence positions locales/Binance, ouverture suspendue par sécurité.")
 
     open_count = max(local_open_count, remote_open_count)
