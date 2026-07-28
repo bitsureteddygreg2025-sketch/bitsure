@@ -47,6 +47,10 @@ USER_COMMAND_CATEGORIES = [
         ("/autotrade", "Ouvrir le menu AutoTrade"),
         ("/autotrade on <code>", "Activer AutoTrade après authentification"),
         ("/autotrade off", "Désactiver AutoTrade"),
+        ("/periodic_analysis on <code>", "Activer l'analyse automatique du marché"),
+        ("/periodic_analysis on <5|10> <code>", "Activer l'analyse avec intervalle"),
+        ("/periodic_analysis off", "Désactiver l'analyse automatique"),
+
         ("/config", "Afficher la configuration de trading"),
         ("/positions", "Lister les positions ouvertes"),
         ("/close <id> <code>", "Fermer manuellement une position"),
