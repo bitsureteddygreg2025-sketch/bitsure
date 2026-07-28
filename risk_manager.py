@@ -23,6 +23,20 @@ logger = logging.getLogger("risk_manager")
 MAX_EXPOSURE_PCT = float(os.getenv("MAX_POSITION_EXPOSURE_PCT", "50"))
 MIN_STOP_DISTANCE_PCT = float(os.getenv("MIN_STOP_DISTANCE_PCT", "0.05"))
 
+
+def _max_position_notional(balance: float, leverage: int, market_type: str) -> float:
+    """Return the maximum allowed position notional for the configured market.
+
+    Spot positions consume full notional from cash balance. Futures positions use
+    margin, so the same account exposure cap must be converted to notional by
+    applying leverage; otherwise high-leverage trades are rejected even when the
+    required margin is inside the intended cap.
+    """
+    exposure_margin_cap = balance * (MAX_EXPOSURE_PCT / 100)
+    if market_type == "futures":
+        return exposure_margin_cap * max(int(leverage or 1), 1)
+    return exposure_margin_cap
+
 def _log_position_sizing_diagnostics(
     *,
     user_id: int,
@@ -244,7 +258,7 @@ def calculate_position_size(
             risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
             entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
             stop_distance_pct=None, quantity=None, notional=None,
-            max_notional=balance * (MAX_EXPOSURE_PCT / 100),
+            max_notional=_max_position_notional(balance, leverage, market_type),
             decision="REFUS: distance SL nulle",
         )
         raise ValueError("SL invalide : distance nulle avec le prix d'entrée.")
@@ -255,14 +269,14 @@ def calculate_position_size(
             risk_pct=config.risk_per_trade, risk_amount=risk_amount, leverage=leverage,
             entry_price=entry_price, sl_price=sl_price, price_distance=price_distance,
             stop_distance_pct=stop_distance_pct, quantity=None, notional=None,
-            max_notional=balance * (MAX_EXPOSURE_PCT / 100),
+            max_notional=_max_position_notional(balance, leverage, market_type),
             decision="REFUS: SL trop serre",
         )
         raise ValueError(f"SL trop serré ({stop_distance_pct:.4f}%). Minimum configuré: {MIN_STOP_DISTANCE_PCT}%.")
 
     quantity = risk_amount / price_distance
     notional = quantity * entry_price
-    max_notional = balance * (MAX_EXPOSURE_PCT / 100)
+    max_notional = _max_position_notional(balance, leverage, market_type)
     if notional > max_notional:
         _log_position_sizing_diagnostics(
             user_id=user_id,
