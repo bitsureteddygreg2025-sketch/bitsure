@@ -78,6 +78,9 @@ class TradingConfig:
     testnet: bool = DEFAULTS["testnet"]
     cooldown_seconds: int = 0
     daily_loss_accum: float = 0.0
+    safety_lock: bool = False
+    safety_lock_reason: Optional[str] = None
+    safety_lock_at: Optional[float] = None
 
 
 def ensure_config_row(user_id: int) -> None:
@@ -121,7 +124,8 @@ def get_config(user_id: int) -> TradingConfig:
                        dca_enabled, dca_steps, dca_step_pct, symbol_whitelist,
                        symbol_blacklist, market_type, trading_style,
                        analysis_timeframe, analysis_interval_minutes, testnet,
-                       cooldown_seconds, daily_loss_accum, periodic_analysis_enabled
+                       cooldown_seconds, daily_loss_accum, periodic_analysis_enabled,
+                       safety_lock, safety_lock_reason, safety_lock_at
                 FROM trading_config WHERE user_id = %s
                 """,
                 (user_id,),
@@ -147,6 +151,9 @@ def get_config(user_id: int) -> TradingConfig:
         testnet=row[18], cooldown_seconds=row[19] or 0,
         daily_loss_accum=row[20] or 0.0,
         periodic_analysis_enabled=bool(row[21]) if len(row) > 21 and row[21] is not None else False,
+        safety_lock=bool(row[22]) if len(row) > 22 and row[22] is not None else False,
+        safety_lock_reason=row[23] if len(row) > 23 else None,
+        safety_lock_at=row[24] if len(row) > 24 else None,
     )
 
 

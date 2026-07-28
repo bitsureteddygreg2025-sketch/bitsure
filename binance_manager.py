@@ -194,6 +194,8 @@ def open_position(
     Lève BinanceClientError en cas d'échec (message safe pour l'utilisateur).
     """
     client = _client_for_user(user_id)
+    symbol = symbol.upper()
+    direction = direction.upper()
 
     # Regles Spot vs Futures
     if market_type == "spot":
@@ -204,6 +206,16 @@ def open_position(
     opened_order = None
 
     try:
+        if market_type == "futures":
+            remote_positions = get_open_binance_positions(user_id, market_type=market_type)
+            same = [p for p in remote_positions if p["symbol"] == symbol and p["direction"] == direction]
+            opposite_positions = [p for p in remote_positions if p["symbol"] == symbol and p["direction"] != direction]
+            if same or opposite_positions:
+                raise BinanceClientError(
+                    f"Ouverture refusée: position Binance existante sur {symbol} "
+                    f"({remote_positions})."
+                )
+
         filters = get_symbol_filters(client, symbol, market_type)
         step_size = filters.get("LOT_SIZE", {}).get("stepSize") or filters.get(
             "MARKET_LOT_SIZE", {}
@@ -337,9 +349,24 @@ def close_position(
 ) -> dict:
     """Ferme une position au marché (côté opposé à l'ouverture)."""
     client = _client_for_user(user_id)
+    symbol = symbol.upper()
+    direction = direction.upper()
     opposite = "SELL" if direction == "BUY" else "BUY"
 
     try:
+        if market_type == "futures":
+            remote_positions = get_open_binance_positions(user_id, market_type=market_type)
+            matching = [
+                p for p in remote_positions
+                if p["symbol"] == symbol
+                and p["direction"] == direction
+                and abs(float(p["quantity"]) - float(quantity)) <= max(float(quantity) * 0.001, 1e-12)
+            ]
+            if not matching:
+                raise BinanceClientError(
+                    f"Fermeture refusée: aucune position Binance {symbol} {direction} "
+                    f"avec quantité attendue {quantity}."
+                )
         filters = get_symbol_filters(client, symbol, market_type)
         step_size = filters.get("LOT_SIZE", {}).get("stepSize") or filters.get("MARKET_LOT_SIZE", {}).get("stepSize", "0.001")
         qty = format_step_value(quantity, step_size)
@@ -500,4 +527,3 @@ def get_full_account_info(user_id: int, market_type: MarketType = "futures") -> 
         raise BinanceClientError(f"Erreur API Binance Account: {e.message}")
 
     return summary
-

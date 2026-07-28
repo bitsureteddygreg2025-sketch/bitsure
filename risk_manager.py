@@ -17,6 +17,7 @@ from trading_config import TradingConfig, record_daily_loss
 from binance_manager import get_account_balance, get_available_balance, get_open_binance_positions, BinanceClientError
 from database import get_connection
 from utils import normalize_symbol
+from trading_safety import SafetyError, assert_trading_allowed, engage_safe_mode
 
 logger = logging.getLogger("risk_manager")
 MAX_EXPOSURE_PCT = float(os.getenv("MAX_POSITION_EXPOSURE_PCT", "50"))
@@ -153,6 +154,10 @@ def check_symbol_allowed(config: TradingConfig, symbol: str) -> RiskCheckResult:
 
 def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, direction: str | None = None) -> RiskCheckResult:
     """Vérifie toutes les règles de risque avant d'ouvrir une nouvelle position."""
+    try:
+        assert_trading_allowed(config)
+    except SafetyError as e:
+        return RiskCheckResult(False, str(e))
 
     symbol_check = check_symbol_allowed(config, symbol)
     if not symbol_check.allowed:
@@ -174,6 +179,7 @@ def check_can_open_position(user_id: int, config: TradingConfig, symbol: str, di
                 "Risk divergence user=%s local_open=%s remote_open=%s",
                 user_id, local_open_count, remote_open_count,
             )
+            engage_safe_mode(user_id, f"Divergence positions local={local_open_count} binance={remote_open_count}")
             return RiskCheckResult(False, "Divergence positions locales/Binance, ouverture suspendue par sécurité.")
 
     open_count = max(local_open_count, remote_open_count)
@@ -259,35 +265,6 @@ def calculate_position_size(
     notional = quantity * entry_price
     max_notional = balance * (MAX_EXPOSURE_PCT / 100)
     if notional > max_notional:
-if notional > max_notional:
-    _log_position_sizing_diagnostics(
-        user_id=user_id,
-        market_type=market_type,
-        balance=balance,
-        risk_pct=config.risk_per_trade,
-        risk_amount=risk_amount,
-        leverage=leverage,
-        entry_price=entry_price,
-        sl_price=sl_price,
-        price_distance=price_distance,
-        stop_distance_pct=stop_distance_pct,
-        quantity=quantity,
-        notional=notional,
-        max_notional=max_notional,
-        decision="REFUS: exposition superieure au plafond",
-    )
-    raise ValueError(
-        f"Exposition trop élevée ({notional:.2f} USDT > plafond {max_notional:.2f} USDT)."
-    )
-
-available = None
-required_margin = None
-
-if market_type == "futures":
-    available = get_available_balance(user_id, market_type=market_type)
-    required_margin = notional / max(int(config.leverage or 1), 1)
-
-    if required_margin > available:
         _log_position_sizing_diagnostics(
             user_id=user_id,
             market_type=market_type,
@@ -302,32 +279,60 @@ if market_type == "futures":
             quantity=quantity,
             notional=notional,
             max_notional=max_notional,
-            available_margin=available,
-            required_margin=required_margin,
-            decision="REFUS: marge disponible insuffisante",
+            decision="REFUS: exposition superieure au plafond",
         )
         raise ValueError(
-            f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT)."
+            f"Exposition trop élevée ({notional:.2f} USDT > plafond {max_notional:.2f} USDT)."
         )
 
-_log_position_sizing_diagnostics(
-    user_id=user_id,
-    market_type=market_type,
-    balance=balance,
-    risk_pct=config.risk_per_trade,
-    risk_amount=risk_amount,
-    leverage=leverage,
-    entry_price=entry_price,
-    sl_price=sl_price,
-    price_distance=price_distance,
-    stop_distance_pct=stop_distance_pct,
-    quantity=quantity,
-    notional=notional,
-    max_notional=max_notional,
-    available_margin=available,
-    required_margin=required_margin,
-    decision="ACCEPTE",
-)
+    available = None
+    required_margin = None
+
+    if market_type == "futures":
+        available = get_available_balance(user_id, market_type=market_type)
+        required_margin = notional / max(int(config.leverage or 1), 1)
+
+        if required_margin > available:
+            _log_position_sizing_diagnostics(
+                user_id=user_id,
+                market_type=market_type,
+                balance=balance,
+                risk_pct=config.risk_per_trade,
+                risk_amount=risk_amount,
+                leverage=leverage,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                price_distance=price_distance,
+                stop_distance_pct=stop_distance_pct,
+                quantity=quantity,
+                notional=notional,
+                max_notional=max_notional,
+                available_margin=available,
+                required_margin=required_margin,
+                decision="REFUS: marge disponible insuffisante",
+            )
+            raise ValueError(
+                f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT)."
+            )
+
+    _log_position_sizing_diagnostics(
+        user_id=user_id,
+        market_type=market_type,
+        balance=balance,
+        risk_pct=config.risk_per_trade,
+        risk_amount=risk_amount,
+        leverage=leverage,
+        entry_price=entry_price,
+        sl_price=sl_price,
+        price_distance=price_distance,
+        stop_distance_pct=stop_distance_pct,
+        quantity=quantity,
+        notional=notional,
+        max_notional=max_notional,
+        available_margin=available,
+        required_margin=required_margin,
+        decision="ACCEPTE",
+    )
     return quantity
 
 
