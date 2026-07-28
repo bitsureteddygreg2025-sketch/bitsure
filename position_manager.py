@@ -207,14 +207,18 @@ def reconcile_user_positions(user_id: int, startup_mode: bool = False) -> dict:
         open_orders = get_open_binance_orders(user_id, market_type="futures")
         open_order_ids = {str(order.get("orderId")) for order in open_orders if order.get("orderId") is not None}
         for trade in local_trades:
+            # Only check protective orders if the trade's position is actually open on Binance
+            if _trade_key(trade) not in remote_by_key:
+                continue
             for field in ("sl_order_id", "tp_order_id"):
                 oid = trade.get(field)
-                if oid and str(oid) not in open_order_ids and _trade_key(trade) in remote_by_key:
+                if oid and str(oid) not in open_order_ids:
                     log_error(
                         logger, user_id, f"reconcile.{field}",
                         f"Ordre protecteur absent côté Binance pour trade {trade['id']}: {oid}",
                     )
-                    engage_safe_mode(user_id, f"Ordre protecteur absent pour trade {trade['id']}")
+                    # Note: Protective orders (STOP_MARKET / TAKE_PROFIT_MARKET) may have been triggered or filled
+                    # without closing the trade record yet. Do NOT engage safe mode here.
     except BinanceClientError as e:
         log_error(logger, user_id, "reconcile.orders", str(e))
 

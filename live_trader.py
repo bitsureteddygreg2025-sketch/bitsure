@@ -243,7 +243,6 @@ def execute_draft(user_id: int, draft: LiveOrderDraft, execution_context: Option
             result["order"] = order
     except (BinanceAPIException, BinanceOrderException) as e:
         logger.warning("Live order failed user=%s symbol=%s: %s", user_id, draft.symbol, getattr(e, "message", str(e)))
-        engage_safe_mode(user_id, f"Échec ordre live Binance: {getattr(e, 'message', str(e))}")
         raise BinanceClientError(f"Erreur Binance Live Trading : {getattr(e, 'message', str(e))}")
 
     _save_live_trade(user_id, draft, result)
