@@ -17,7 +17,8 @@ import pandas as pd
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 
-from trading_config import get_binance_credentials, mark_credentials_invalid
+from trading_config import get_binance_credentials, mark_credentials_invalid, get_config
+from trading_safety import SafetyError, assert_trading_allowed
 
 logger = logging.getLogger("binance_manager")
 
@@ -26,6 +27,40 @@ MarketType = Literal["spot", "futures"]
 
 class BinanceClientError(Exception):
     """Erreur applicative levée par ce module (message safe à afficher à l'utilisateur)."""
+
+
+ORDER_CONTEXT_AUTOTRADE = "autotrade"
+ORDER_CONTEXT_MANUAL_AUTHENTICATED = "manual_authenticated"
+ORDER_CONTEXT_EMERGENCY = "emergency_stop"
+_ALLOWED_ORDER_CONTEXTS = {
+    ORDER_CONTEXT_AUTOTRADE,
+    ORDER_CONTEXT_MANUAL_AUTHENTICATED,
+    ORDER_CONTEXT_EMERGENCY,
+}
+
+
+def _assert_order_context_allowed(user_id: int, execution_context: Optional[str], *, require_auto_trade: bool) -> None:
+    """Fail closed before any real Binance order can be sent.
+
+    Telegram/webhooks/scanners must not rely on their route-level checks only: every
+    backend order primitive must receive an explicit, already-authorized execution
+    context. AutoTrade contexts do not require a fresh PIN per order, but they are
+    accepted only while AutoTrade remains enabled and safety state is valid.
+    """
+    if execution_context not in _ALLOWED_ORDER_CONTEXTS:
+        raise BinanceClientError("Ordre réel refusé: contexte d'exécution non autorisé.")
+
+    config = get_config(user_id)
+    try:
+        assert_trading_allowed(
+            config,
+            require_auto_trade=(require_auto_trade or execution_context == ORDER_CONTEXT_AUTOTRADE),
+        )
+    except SafetyError as e:
+        raise BinanceClientError(f"Ordre réel refusé: {e}")
+
+    if execution_context == ORDER_CONTEXT_AUTOTRADE and not config.auto_trade:
+        raise BinanceClientError("Ordre automatique refusé: AutoTrade est désactivé.")
 
 
 def _client_for_user(user_id: int) -> Client:
@@ -187,12 +222,14 @@ def open_position(
     market_type: MarketType = "futures",
     leverage: int = 1,
     client_order_id: Optional[str] = None,
+    execution_context: Optional[str] = None,
 ) -> dict:
     """
     Ouvre une position au marché, puis place SL/TP.
     Retourne un dict avec les IDs d'ordres (à stocker dans la table `trades`).
     Lève BinanceClientError en cas d'échec (message safe pour l'utilisateur).
     """
+    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=True)
     client = _client_for_user(user_id)
     symbol = symbol.upper()
     direction = direction.upper()
@@ -346,8 +383,10 @@ def close_position(
     direction: str,
     quantity: float,
     market_type: MarketType = "futures",
+    execution_context: Optional[str] = None,
 ) -> dict:
     """Ferme une position au marché (côté opposé à l'ouverture)."""
+    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=(execution_context == ORDER_CONTEXT_AUTOTRADE))
     client = _client_for_user(user_id)
     symbol = symbol.upper()
     direction = direction.upper()
@@ -384,7 +423,8 @@ def close_position(
         raise BinanceClientError(f"Erreur Binance à la fermeture : {getattr(e, 'message', str(e))}")
 
 
-def cancel_order(user_id: int, symbol: str, order_id: str, market_type: MarketType = "futures") -> None:
+def cancel_order(user_id: int, symbol: str, order_id: str, market_type: MarketType = "futures", execution_context: Optional[str] = None) -> None:
+    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=(execution_context == ORDER_CONTEXT_AUTOTRADE))
     client = _client_for_user(user_id)
     try:
         if market_type == "futures":

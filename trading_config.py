@@ -11,6 +11,7 @@ Adapte l'import ci-dessous si ta fonction s'appelle différemment.
 
 import os
 import time
+import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List
 
@@ -24,6 +25,15 @@ except ImportError:
             "Adapte l'import en haut de trading_config.py."
         )
 
+
+logger = logging.getLogger("trading_config")
+
+CRITICAL_AUTOTRADE_FIELDS = {
+    "leverage", "risk_per_trade", "max_positions", "min_score", "max_daily_loss",
+    "trailing_stop", "trailing_stop_pct", "dca_enabled", "dca_steps", "dca_step_pct",
+    "symbol_whitelist", "symbol_blacklist", "market_type", "trading_style",
+    "analysis_timeframe", "analysis_interval_minutes", "testnet", "cooldown_seconds",
+}
 
 DEFAULTS = {
     "auto_trade": os.getenv("AUTO_TRADE_DEFAULT", "False") == "True",
@@ -158,10 +168,22 @@ def get_config(user_id: int) -> TradingConfig:
 
 
 def update_config(user_id: int, **fields) -> TradingConfig:
-    """Met à jour un ou plusieurs champs de configuration."""
+    """Met à jour un ou plusieurs champs de configuration.
+
+    Défense AutoTrade: toute modification de paramètre critique suspend
+    l'automatisation jusqu'à une nouvelle activation authentifiée, sauf si
+    l'appel désactive déjà explicitement AutoTrade ou correspond à une activation
+    authentifiée (`auto_trade=True`).
+    """
     ensure_config_row(user_id)
     if not fields:
         return get_config(user_id)
+
+    critical_changed = bool(CRITICAL_AUTOTRADE_FIELDS.intersection(fields))
+    if critical_changed and fields.get("auto_trade") is not True:
+        fields.setdefault("auto_trade", False)
+        fields.setdefault("periodic_analysis_enabled", False)
+        logger.warning("AutoTrade suspended after critical config change user=%s fields=%s", user_id, sorted(CRITICAL_AUTOTRADE_FIELDS.intersection(fields)))
 
     allowed = set(asdict(TradingConfig(user_id=0)).keys()) - {"user_id"}
     set_clauses = []
@@ -191,7 +213,9 @@ def update_config(user_id: int, **fields) -> TradingConfig:
     finally:
         conn.close()
 
-    return get_config(user_id)
+    updated = get_config(user_id)
+    logger.info("trading_config_updated user=%s fields=%s auto_trade=%s safety_lock=%s", user_id, sorted(fields.keys()), updated.auto_trade, updated.safety_lock)
+    return updated
 
 
 def save_binance_credentials(user_id: int, api_key: str, api_secret: str, testnet: bool = True) -> None:
