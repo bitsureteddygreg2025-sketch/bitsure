@@ -15,7 +15,7 @@ from trading_config import get_config, TradingConfig, update_config
 from risk_manager import record_trade_loss
 from binance_manager import (
     get_price, close_position, cancel_order, get_open_binance_positions,
-    get_open_binance_orders, BinanceClientError,
+    get_open_binance_orders, BinanceClientError, ORDER_CONTEXT_AUTOTRADE, ORDER_CONTEXT_MANUAL_AUTHENTICATED, ORDER_CONTEXT_EMERGENCY,
 )
 from trading_logger import get_trading_logger, log_trade_closed, log_error
 from trading_safety import engage_safe_mode
@@ -144,7 +144,7 @@ def _cancel_remaining_protection(trade: dict, executed_reason: str) -> None:
     # Si TP exécuté, annuler le SL restant; si SL exécuté, annuler le TP restant.
     oid = trade.get("sl_order_id") if executed_reason == "TP" else trade.get("tp_order_id")
     if oid:
-        cancel_order(trade["user_id"], trade["symbol"], oid, trade["market_type"])
+        cancel_order(trade["user_id"], trade["symbol"], oid, trade["market_type"], execution_context=ORDER_CONTEXT_AUTOTRADE)
 
 def _trade_key(trade: dict) -> tuple[str, str]:
     return (trade["symbol"], trade["direction"])
@@ -277,6 +277,7 @@ async def monitor_open_positions(context: ContextTypes.DEFAULT_TYPE):
                     close_position(
                         trade["user_id"], trade["symbol"], trade["direction"],
                         trade["quantity"], trade["market_type"],
+                        execution_context=ORDER_CONTEXT_AUTOTRADE,
                     )
                 elif _remote_position_exists(trade["user_id"], trade["symbol"], trade["direction"]):
                     # Un prix local a touché SL/TP, mais Binance indique que la position existe encore:
@@ -348,11 +349,11 @@ def close_trade_manual(trade_id: int, user_id: int) -> dict:
             raise ValueError("Fermeture refusée: position Binance correspondante introuvable ou taille différente.")
 
     current_price = get_price(user_id, trade["symbol"], trade["market_type"])
-    close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"])
+    close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"], execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
 
     for oid in (trade.get("sl_order_id"), trade.get("tp_order_id")):
         if oid:
-            cancel_order(user_id, trade["symbol"], oid, trade["market_type"])
+            cancel_order(user_id, trade["symbol"], oid, trade["market_type"], execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
 
     pnl_usdt, pnl_pct = close_trade(trade, "manual", current_price)
     return {"pnl_usdt": pnl_usdt, "pnl_pct": pnl_pct, "symbol": trade["symbol"]}
@@ -369,10 +370,10 @@ def emergency_stop_all(user_id: int) -> int:
     for trade in local_trades:
         try:
             current_price = get_price(user_id, trade["symbol"], trade["market_type"])
-            close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"])
+            close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"], execution_context=ORDER_CONTEXT_EMERGENCY)
             for oid in (trade.get("sl_order_id"), trade.get("tp_order_id")):
                 if oid:
-                    cancel_order(user_id, trade["symbol"], oid, trade["market_type"])
+                    cancel_order(user_id, trade["symbol"], oid, trade["market_type"], execution_context=ORDER_CONTEXT_EMERGENCY)
             close_trade(trade, "emergency", current_price)
             closed += 1
         except Exception as e:
@@ -383,9 +384,9 @@ def emergency_stop_all(user_id: int) -> int:
             key = (pos["symbol"], pos["direction"])
             if key in local_keys:
                 continue
-            close_position(user_id, pos["symbol"], pos["direction"], pos["quantity"], "futures")
+            close_position(user_id, pos["symbol"], pos["direction"], pos["quantity"], "futures", execution_context=ORDER_CONTEXT_EMERGENCY)
             for order in get_open_binance_orders(user_id, market_type="futures", symbol=pos["symbol"]):
-                cancel_order(user_id, pos["symbol"], order.get("orderId"), "futures")
+                cancel_order(user_id, pos["symbol"], order.get("orderId"), "futures", execution_context=ORDER_CONTEXT_EMERGENCY)
             closed += 1
     except Exception as e:
         log_error(logger, user_id, "emergency_stop_all.remote", str(e))

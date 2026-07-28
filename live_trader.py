@@ -24,6 +24,7 @@ from binance_manager import (
     get_symbol_filters,
     round_step_size,
     set_leverage,
+    _assert_order_context_allowed,
 )
 from database import get_connection
 from trading_config import get_config
@@ -186,7 +187,8 @@ def validate_draft(user_id: int, draft: LiveOrderDraft) -> dict:
     }
 
 
-def execute_draft(user_id: int, draft: LiveOrderDraft) -> dict:
+def execute_draft(user_id: int, draft: LiveOrderDraft, execution_context: Optional[str] = None) -> dict:
+    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=False)
     checks = validate_draft(user_id, draft)
     client = _client_for_user(user_id)
     result = {"checks": checks}
@@ -286,7 +288,8 @@ def get_open_orders(user_id: int, symbol: Optional[str] = None) -> list[dict]:
         raise BinanceClientError(f"Erreur Binance ordres ouverts : {e.message}")
 
 
-def cancel_live_order(user_id: int, symbol: str, order_id: str) -> None:
+def cancel_live_order(user_id: int, symbol: str, order_id: str, execution_context: Optional[str] = None) -> None:
+    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=False)
     config = get_config(user_id)
     client = _client_for_user(user_id)
     try:
