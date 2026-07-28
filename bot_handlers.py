@@ -675,7 +675,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot_command_catalog import render_help_pages
     help_pages = render_help_pages(include_admin=user_mgr.is_admin(user_id))
     if trial_msg and help_pages:
-        help_pages[-1] = help_pages[-1] + trial_msg
+        # If adding the trial message exceeds the limit, add it as a new page
+        if len(help_pages[-1]) + len(trial_msg) > 4000:
+             help_pages.append(trial_msg.strip())
+        else:
+             help_pages[-1] = help_pages[-1] + trial_msg
     for page in help_pages:
         await update.message.reply_text(page, parse_mode=ParseMode.MARKDOWN)
 

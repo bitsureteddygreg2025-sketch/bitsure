@@ -16,6 +16,7 @@ from execution_engine import execute_signal, mark_signal_status, validate_signal
 from database import get_connection
 from trading_logger import get_trading_logger
 from security_manager import has_security_code, set_initial_code, change_code, verify_code
+from utils import escape_markdown
 
 logger = get_trading_logger("trading_handlers")
 
@@ -800,6 +801,12 @@ def _build_autotrade_menu(user_id: int):
     """Construit (texte, clavier) du menu AutoTrade. Réutilisé par /autotrade et le callback menu_autotrade."""
     config = get_config(user_id)
     status = "ON ✅" if config.auto_trade else "OFF ❌"
+    
+    market = escape_markdown(config.market_type.upper())
+    tf = escape_markdown(config.analysis_timeframe)
+    interval = escape_markdown(str(config.analysis_interval_minutes))
+    style = escape_markdown(config.trading_style)
+    
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"Basculer (actuellement {status})", callback_data="toggle_autotrade")],
         [InlineKeyboardButton("Mode spot/futures", callback_data="menu_market_mode")],
@@ -812,9 +819,9 @@ def _build_autotrade_menu(user_id: int):
         f"🤖 *AutoTrade Binance*\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"Mode automatique : *{status}*\n"
-        f"Marché : *{config.market_type.upper()}*\n"
-        f"Analyse : *{config.analysis_timeframe} / {config.analysis_interval_minutes} min*\n"
-        f"Style : *{config.trading_style}*\n\n"
+        f"Marché : *{market}*\n"
+        f"Analyse : *{tf} / {interval} min*\n"
+        f"Style : *{style}*\n\n"
         f"Commandes protégées : /periodic_analysis on|off, /setanalysisinterval, /setanalysistf, /settradingstyle."
     )
     return text, keyboard
@@ -878,6 +885,11 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
     elif data == "menu_analysis_config":
         config = get_config(user_id)
         p_status = "ACTIVÉE ✅" if config.periodic_analysis_enabled else "DÉSACTIVÉE ❌"
+        
+        interval = escape_markdown(str(config.analysis_interval_minutes))
+        tf = escape_markdown(config.analysis_timeframe)
+        style = escape_markdown(config.trading_style)
+        
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(f"Analyse Périodique ({p_status})", callback_data="toggle_periodic_analysis"),
@@ -909,9 +921,9 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"📊 *Configuration Analyse Périodique*\n\n"
             f"État : *{p_status}*\n"
-            f"Intervalle : *{config.analysis_interval_minutes} min*\n"
-            f"Timeframe : *{config.analysis_timeframe}*\n"
-            f"Style : *{config.trading_style}*\n\n"
+            f"Intervalle : *{interval} min*\n"
+            f"Timeframe : *{tf}*\n"
+            f"Style : *{style}*\n\n"
             f"Commandes protégées : /periodic_analysis on|off, /setanalysisinterval, /setanalysistf, /settradingstyle.",
             reply_markup=keyboard,
             parse_mode="Markdown",

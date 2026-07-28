@@ -44,7 +44,7 @@ def get_date_days_ago(days: int) -> datetime:
     return datetime.now() - timedelta(days=days)
 
 
-def cache_key(*args) -> str:
-    """Génère une clé de cache unique"""
-    raw = "|".join(str(a) for a in args)
-    return hashlib.md5(raw.encode()).hexdigest()
+def escape_markdown(text: str) -> str:
+    """Escapes characters that have special meaning in Telegram Markdown."""
+    return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
