@@ -34,6 +34,25 @@ NO_KEYS_MESSAGE = (
 )
 
 
+async def _delete_sensitive_command_message(update: Update, action: str) -> None:
+    """Best-effort deletion for Telegram messages that may contain secrets.
+
+    The secret value is never logged. If Telegram refuses deletion (permissions,
+    age, chat type), only metadata is logged and the flow continues safely.
+    """
+    message = getattr(update, "message", None)
+    if not message:
+        return
+    try:
+        await message.delete()
+    except Exception as exc:
+        logger.warning(
+            "Sensitive command message deletion failed action=%s chat_id=%s message_id=%s error_type=%s",
+            action,
+            getattr(getattr(message, "chat", None), "id", None),
+            getattr(message, "message_id", None),
+            type(exc).__name__,
+        )
 
 
 def _pop_security_code(context: ContextTypes.DEFAULT_TYPE) -> str | None:
@@ -54,10 +73,7 @@ def _sensitive_authorized(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> t
 
 async def cmd_setsecurity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
+    await _delete_sensitive_command_message(update, "setsecurity")
     if not has_security_code(user_id):
         if len(context.args) != 1:
             await context.bot.send_message(chat_id=user_id, text="Usage : /setsecurity <4827BZ>")
@@ -83,16 +99,11 @@ async def cmd_setsecurity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setapikeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "setapikeys")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
         return
-
-    # Supprime le message contenant les clés pour éviter qu'il traîne dans le chat.
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
 
     if len(context.args) < 2:
         await context.bot.send_message(
@@ -123,6 +134,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].lower() in ("on", "off"):
         desired = context.args[0].lower() == "on"
         if desired:
+            await _delete_sensitive_command_message(update, "autotrade_on")
             ok, msg = _sensitive_authorized(user_id, context)
             if not ok:
                 await update.message.reply_text(f"🔐 {msg}")
@@ -136,6 +148,72 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text, keyboard = _build_autotrade_menu(user_id)
     await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+
+
+async def cmd_periodic_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Active/désactive l'analyse automatique du marché Binance sans activer AutoTrade."""
+    user_id = update.effective_user.id
+    if not _is_user_allowed(user_id):
+        await update.message.reply_text(NO_KEYS_MESSAGE)
+        return
+
+    config = get_config(user_id)
+    if not context.args or context.args[0].lower() in ("status", "etat", "état"):
+        status = "ON ✅" if config.periodic_analysis_enabled else "OFF ❌"
+        await update.message.reply_text(
+            "📊 Analyse périodique Binance\n"
+            f"État : {status}\n"
+            f"Intervalle : {config.analysis_interval_minutes} min\n"
+            f"Timeframe : {config.analysis_timeframe}\n"
+            f"Style : {config.trading_style}\n\n"
+            "Activer : /periodic_analysis on <code> ou /periodic_analysis on <5|10> <code>\n"
+            "Désactiver : /periodic_analysis off"
+        )
+        return
+
+    action = context.args[0].lower()
+    if action not in ("on", "off"):
+        await update.message.reply_text("Usage : /periodic_analysis on <code> | /periodic_analysis on <5|10> <code> | /periodic_analysis off")
+        return
+
+    if action == "off":
+        update_config(user_id, periodic_analysis_enabled=False)
+        await update.message.reply_text("📊 Analyse périodique désactivée.")
+        return
+
+    await _delete_sensitive_command_message(update, "periodic_analysis_on")
+    ok, msg = _sensitive_authorized(user_id, context)
+    if not ok:
+        await update.message.reply_text(f"🔐 {msg}")
+        return
+
+    config = get_config(user_id)
+    if config.safety_lock:
+        await update.message.reply_text(f"🔐 Analyse refusée : mode sûr actif ({config.safety_lock_reason or 'raison non précisée'}).")
+        return
+
+    interval = config.analysis_interval_minutes
+    if len(context.args) >= 3:
+        try:
+            interval = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("Intervalle invalide. Utilise 5 ou 10 minutes.")
+            return
+
+    if interval not in (5, 10):
+        await update.message.reply_text(
+            "Intervalle non supporté à chaud. Utilise 5 ou 10 minutes pour garantir que le scheduler actif lance l'analyse."
+        )
+        return
+
+    update_config(user_id, periodic_analysis_enabled=True, analysis_interval_minutes=interval)
+    await update.message.reply_text(
+        "✅ Analyse périodique activée.\n"
+        f"Le marché Binance sera analysé automatiquement toutes les {interval} minutes.\n"
+        "AutoTrade reste séparé : aucun ordre automatique ne sera ouvert sauf si AutoTrade est activé."
+    )
 
 
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,6 +260,7 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "close")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -324,6 +403,7 @@ async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setleverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "setleverage")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -341,6 +421,7 @@ async def cmd_setleverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setrisk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "setrisk")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -362,6 +443,7 @@ async def cmd_setrisk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "whitelist")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -378,6 +460,7 @@ async def cmd_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "blacklist")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -394,6 +477,7 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await _delete_sensitive_command_message(update, "emergency_stop")
     ok, msg = _sensitive_authorized(user_id, context)
     if not ok:
         await update.message.reply_text(f"🔐 {msg}")
@@ -875,10 +959,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
 async def cmd_confirmmanual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
+    await _delete_sensitive_command_message(update, "confirmmanual")
     if len(context.args) != 2:
         await context.bot.send_message(chat_id=user_id, text="Usage : /confirmmanual <token> <code_securite>")
         return

@@ -20,7 +20,7 @@ from trading_config import get_config, TradingConfig
 from risk_manager import check_can_open_position, calculate_position_size
 from binance_manager import (
     open_position, get_price, get_tradable_symbols, get_klines_dataframe,
-    make_client_order_id, BinanceClientError,
+    make_client_order_id, BinanceClientError, ORDER_CONTEXT_AUTOTRADE,
 )
 from history_manager import HistoryManager
 from signal_engine import SignalEngine
@@ -196,6 +196,7 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
             market_type=config.market_type,
             leverage=config.leverage,
             client_order_id=make_client_order_id("sig", signal["id"]),
+            execution_context=ORDER_CONTEXT_AUTOTRADE,
         )
 
         fields.update({
