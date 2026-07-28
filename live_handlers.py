@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from binance_manager import BinanceClientError
+from binance_manager import ORDER_CONTEXT_MANUAL_AUTHENTICATED
 from live_trader import (
     build_draft,
     cancel_live_order,
@@ -255,7 +256,7 @@ async def live_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
             await _safe_edit_message_text(query, "❌ Aucun ordre Live Trading en attente de confirmation.", reply_markup=_live_menu_keyboard())
             return
         try:
-            result = execute_draft(user_id, draft)
+            result = execute_draft(user_id, draft, execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
         except BinanceClientError as e:
             await _safe_edit_message_text(query, f"❌ Ordre non envoyé : {e}", reply_markup=_live_menu_keyboard())
             return
@@ -298,7 +299,7 @@ async def cmd_live_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage : /live_cancel <SYMBOL> <ORDER_ID>")
         return
     try:
-        cancel_live_order(update.effective_user.id, context.args[0], context.args[1])
+        cancel_live_order(update.effective_user.id, context.args[0], context.args[1], execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
         await update.message.reply_text("✅ Ordre annulé.")
     except BinanceClientError as e:
         await update.message.reply_text(f"❌ Annulation refusée : {e}")
