@@ -389,9 +389,9 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup, parse_mode="Markdown")
+        await update.callback_query.edit_message_text("\n".join([escape_markdown(l) for l in lines]), reply_markup=markup, parse_mode="Markdown")
     else:
-        await update.message.reply_text("\n".join(lines), reply_markup=markup, parse_mode="Markdown")
+        await update.message.reply_text("\n".join([escape_markdown(l) for l in lines]), reply_markup=markup, parse_mode="Markdown")
 
 
 async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -822,7 +822,7 @@ def _build_autotrade_menu(user_id: int):
         f"Marché : *{market}*\n"
         f"Analyse : *{tf} / {interval} min*\n"
         f"Style : *{style}*\n\n"
-        f"Commandes protégées : /periodic_analysis on|off, /setanalysisinterval, /setanalysistf, /settradingstyle."
+        f"Commandes protégées : {escape_markdown('/periodic_analysis')} on|off, {escape_markdown('/setanalysisinterval')}, {escape_markdown('/setanalysistf')}, {escape_markdown('/settradingstyle')}."
     )
     return text, keyboard
 
@@ -865,7 +865,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             ],
         ])
         await query.edit_message_text(
-            f"🎯 *Mode de Marché Actuel :* `{config.market_type.upper()}`\n\n"
+            f"🎯 *Mode de Marché Actuel :* `{escape_markdown(config.market_type.upper())}`\n\n"
             f"Choisis le mode à utiliser pour les analyses et la prise d'ordres. Commande protégée : /setmarket <spot|futures> <code>.",
             reply_markup=keyboard,
             parse_mode="Markdown",
@@ -986,7 +986,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         if not trades:
             await query.edit_message_text("📈 *Positions ouvertes :*\n\nAucune position ouverte actuellement.", reply_markup=keyboard, parse_mode="Markdown")
             return
-        lines = [f"#{t['id']} {t['symbol']} {t['direction']} qty={t['quantity']} (SL {t['sl_price']} / TP {t['tp_price']})" for t in trades]
+        lines = [f"#{t['id']} {escape_markdown(t['symbol'])} {t['direction']} qty={t['quantity']} (SL {t['sl_price']} / TP {t['tp_price']})" for t in trades]
         await query.edit_message_text("📈 *Positions ouvertes :*\n\n" + "\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
 
     elif data == "menu_trading_config":
@@ -1228,7 +1228,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         lines = ["🕓 *10 derniers trades*\n"]
         for symbol, direction, pnl, reason, closed_at in rows:
             emoji = "🟢" if (pnl or 0) >= 0 else "🔴"
-            lines.append(f"{emoji} `{symbol}` {direction} — {pnl:.2f} USDT ({reason})")
+            lines.append(f"{emoji} `{escape_markdown(symbol)}` {direction} — {pnl:.2f} USDT ({reason})")
         await query.edit_message_text("\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
 
     elif data.startswith("manual_trade_cancel_"):
