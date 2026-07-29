@@ -277,26 +277,12 @@ def calculate_position_size(
     quantity = risk_amount / price_distance
     notional = quantity * entry_price
     max_notional = _max_position_notional(balance, leverage, market_type)
+
+    capped = False
     if notional > max_notional:
-        _log_position_sizing_diagnostics(
-            user_id=user_id,
-            market_type=market_type,
-            balance=balance,
-            risk_pct=config.risk_per_trade,
-            risk_amount=risk_amount,
-            leverage=leverage,
-            entry_price=entry_price,
-            sl_price=sl_price,
-            price_distance=price_distance,
-            stop_distance_pct=stop_distance_pct,
-            quantity=quantity,
-            notional=notional,
-            max_notional=max_notional,
-            decision="REFUS: exposition superieure au plafond",
-        )
-        raise ValueError(
-            f"Exposition trop élevée ({notional:.2f} USDT > plafond {max_notional:.2f} USDT)."
-        )
+        quantity = max_notional / entry_price
+        notional = quantity * entry_price
+        capped = True
 
     available = None
     required_margin = None
@@ -328,6 +314,10 @@ def calculate_position_size(
                 f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT)."
             )
 
+    decision = (
+        "ACCEPTE (Position size capped by maximum exposure)"
+        if capped else "ACCEPTE"
+    )
     _log_position_sizing_diagnostics(
         user_id=user_id,
         market_type=market_type,
@@ -344,7 +334,7 @@ def calculate_position_size(
         max_notional=max_notional,
         available_margin=available,
         required_margin=required_margin,
-        decision="ACCEPTE",
+        decision=decision,
     )
     return quantity
 

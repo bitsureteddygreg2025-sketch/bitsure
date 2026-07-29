@@ -52,14 +52,17 @@ class PositionSizeExposureTests(unittest.TestCase):
     def test_spot_exposure_cap_remains_unleveraged(self):
         config = TradingConfig(user_id=1, market_type="spot", leverage=50, risk_per_trade=1.0)
         with patch.object(risk_manager, "get_account_balance", return_value=4525.82):
-            with self.assertRaisesRegex(ValueError, "Exposition trop élevée"):
-                risk_manager.calculate_position_size(
-                    user_id=1,
-                    config=config,
-                    entry_price=3000.0,
-                    sl_price=2998.0,
-                    market_type="spot",
-                )
+            quantity = risk_manager.calculate_position_size(
+                user_id=1,
+                config=config,
+                entry_price=3000.0,
+                sl_price=2998.0,
+                market_type="spot",
+            )
+            # max_notional = 4525.82 * 0.50 = 2262.91
+            # quantity = 2262.91 / 3000 = 0.75430333...
+            expected_quantity = (4525.82 * 0.50) / 3000.0
+            self.assertAlmostEqual(quantity, expected_quantity, places=4)
 
 
 if __name__ == "__main__":
