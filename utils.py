@@ -1,9 +1,5 @@
-import os
-import json
 import hashlib
-import time
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,11 +42,13 @@ def get_date_days_ago(days: int) -> datetime:
 
 def escape_markdown(text: str) -> str:
     """Escapes characters that have special meaning in Telegram Markdown."""
-    return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+    res = str(text)
+    for char in ["_", "*", "`", "["]:
+        res = res.replace(char, f"\\{char}")
+    return res
 
 
 def cache_key(*args) -> str:
     """Génère une clé de cache unique"""
     raw = "|".join(str(a) for a in args)
     return hashlib.md5(raw.encode()).hexdigest()
-
