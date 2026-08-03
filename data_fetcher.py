@@ -31,7 +31,7 @@ class DataFetcher:
         ])
         self.ws = None
         self.ws_thread = None
-        self.active_source = "twelve"
+        self.active_source = "binance"
 
     @classmethod
     def get_instance(cls):
@@ -134,6 +134,21 @@ class DataFetcher:
         return price
 
     async def _fetch_price(self, symbol: str) -> Optional[Dict]:
+        # 1. Essayer Binance pour les paires USDT (BTCUSDT, ETHUSDT, etc.)
+        if symbol.endswith("USDT") or symbol in ["BTCUSDT", "ETHUSDT"]:
+            try:
+                url = f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={symbol}"
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    bid = float(data.get("bidPrice", 0))
+                    ask = float(data.get("askPrice", 0))
+                    price = (bid + ask) / 2.0 if (bid and ask) else float(data.get("bidPrice") or 0)
+                    return {"price": price, "bid": bid, "ask": ask, "timestamp": time.time()}
+            except Exception as e:
+                logger.warning(f"Binance Price error {symbol}: {e}")
+
+        # 2. Repli / Source Twelve Data pour les autres symboles
         if not TWELVEDATA_API_KEY:
             return None
         try:
@@ -166,6 +181,35 @@ class DataFetcher:
         return None
 
     async def _fetch_history(self, symbol: str, timeframe: str):
+        # 1. Binance pour les paires USDT (BTCUSDT, ETHUSDT...)
+        if symbol.endswith("USDT") or symbol in ["BTCUSDT", "ETHUSDT"]:
+            try:
+                binance_tf = {
+                    "1m": "1m", "5m": "5m", "15m": "15m",
+                    "1h": "1h", "4h": "4h", "1d": "1d"
+                }.get(timeframe, "1d")
+                url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={binance_tf}&limit=1000"
+                r = requests.get(url, timeout=10)
+                if r.status_code == 200:
+                    raw_data = r.json()
+                    if raw_data:
+                        records = []
+                        for k in raw_data:
+                            records.append({
+                                "Date": pd.to_datetime(k[0], unit='ms'),
+                                "Open": float(k[1]),
+                                "High": float(k[2]),
+                                "Low": float(k[3]),
+                                "Close": float(k[4]),
+                                "Volume": float(k[5])
+                            })
+                        df = pd.DataFrame(records)
+                        df.set_index("Date", inplace=True)
+                        return df
+            except Exception as e:
+                logger.warning(f"Binance History error {symbol}: {e}")
+
+        # 2. Twelve Data
         try:
             td_symbol = self._format_symbol(symbol)
             interval = {
