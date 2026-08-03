@@ -313,6 +313,30 @@ def calculate_position_size(
             raise ValueError(
                 f"Marge disponible insuffisante ({available:.2f} USDT < {required_margin:.2f} USDT)."
             )
+    else:  # spot
+        available = get_available_balance(user_id, market_type="spot")
+        if notional > available:
+            _log_position_sizing_diagnostics(
+                user_id=user_id,
+                market_type=market_type,
+                balance=balance,
+                risk_pct=config.risk_per_trade,
+                risk_amount=risk_amount,
+                leverage=1,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                price_distance=price_distance,
+                stop_distance_pct=stop_distance_pct,
+                quantity=quantity,
+                notional=notional,
+                max_notional=max_notional,
+                available_margin=available,
+                required_margin=notional,
+                decision="REFUS: solde cash Spot insuffisant",
+            )
+            raise ValueError(
+                f"Solde disponible Spot insuffisant ({available:.2f} USDT < {notional:.2f} USDT)."
+            )
 
     decision = (
         "ACCEPTE (Position size capped by maximum exposure)"

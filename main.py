@@ -168,6 +168,12 @@ def start_autotrade_scheduler(app):
         kwargs={"context": app},
         id="reconcile_all_accounts", replace_existing=True
     )
+    from health_monitor import scheduled_health_check_job
+    autotrade_scheduler.add_job(
+        scheduled_health_check_job, "interval", minutes=1,
+        kwargs={"context": app},
+        id="scheduled_health_check", replace_existing=True
+    )
     try:
         reconcile_all_accounts(context=app, startup_mode=True)
     except Exception as e:

@@ -8,6 +8,7 @@ et la confirmation des signaux en mode semi-automatique.
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
 
 from trading_config import get_config, update_config, save_binance_credentials
 from binance_manager import test_connection, get_full_account_info, BinanceClientError
@@ -16,7 +17,7 @@ from execution_engine import execute_signal, mark_signal_status, validate_signal
 from database import get_connection
 from trading_logger import get_trading_logger
 from security_manager import has_security_code, set_initial_code, change_code, verify_code
-from utils import escape_markdown
+from utils import escape_markdown, normalize_symbol
 
 logger = get_trading_logger("trading_handlers")
 
@@ -88,8 +89,6 @@ def _parse_on_off(value: str) -> bool | None:
     return None
 
 
-def _normalize_symbol(symbol: str) -> str:
-    return symbol.strip().upper().replace("/", "")
 
 async def cmd_setsecurity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -167,7 +166,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text, keyboard = _build_autotrade_menu(user_id)
-    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
 
 
@@ -259,7 +258,7 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Whitelist : {', '.join(config.symbol_whitelist) or '—'}\n"
         f"Blacklist : {', '.join(config.symbol_blacklist) or '—'}"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,7 +275,7 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"(SL {t['sl_price']} / TP {t['tp_price']})"
         )
     lines.append("\nUtilise /close <id> pour fermer une position.")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,7 +296,7 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"{emoji} Position `{result['symbol']}` fermée. "
             f"PnL : {result['pnl_usdt']:.2f} USDT ({result['pnl_pct']:.2f}%)",
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
     except (ValueError, BinanceClientError) as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -326,7 +325,7 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Trades clôturés : {total}\n"
         f"PnL cumulé : {pnl_sum:.2f} USDT\n"
         f"Win rate : {winrate:.1f}%",
-        parse_mode="Markdown",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
@@ -389,9 +388,9 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text("\n".join([escape_markdown(l) for l in lines]), reply_markup=markup, parse_mode="Markdown")
+        await update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text("\n".join([escape_markdown(l) for l in lines]), reply_markup=markup, parse_mode="Markdown")
+        await update.message.reply_text("\n".join(lines), reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -419,7 +418,7 @@ async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for symbol, direction, pnl, reason, closed_at in rows:
         emoji = "🟢" if (pnl or 0) >= 0 else "🔴"
         lines.append(f"{emoji} `{symbol}` {direction} — {pnl:.2f} USDT ({reason})")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_setleverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -732,7 +731,11 @@ async def cmd_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action not in ("add", "remove") or len(context.args) < 2:
         await update.message.reply_text("Usage : /whitelist <add|remove|clear> <SYMBOLE> <code>")
         return
-    symbol = _normalize_symbol(context.args[1])
+    try:
+        symbol = normalize_symbol(context.args[1])
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
     if action == "add" and symbol not in wl:
         wl.append(symbol)
     if action == "remove":
@@ -761,7 +764,11 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action not in ("add", "remove") or len(context.args) < 2:
         await update.message.reply_text("Usage : /blacklist <add|remove|clear> <SYMBOLE> <code>")
         return
-    symbol = _normalize_symbol(context.args[1])
+    try:
+        symbol = normalize_symbol(context.args[1])
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
     if action == "add" and symbol not in bl:
         bl.append(symbol)
     if action == "remove":
@@ -835,7 +842,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     if data == "menu_autotrade":
         text, keyboard = _build_autotrade_menu(user_id)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
     elif data == "toggle_autotrade":
         config = get_config(user_id)
@@ -868,7 +875,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"🎯 *Mode de Marché Actuel :* `{escape_markdown(config.market_type.upper())}`\n\n"
             f"Choisis le mode à utiliser pour les analyses et la prise d'ordres. Commande protégée : /setmarket <spot|futures> <code>.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data.startswith("set_market_"):
@@ -926,7 +933,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Style : *{style}*\n\n"
             f"Commandes protégées : /periodic_analysis on|off, /setanalysisinterval, /setanalysistf, /settradingstyle.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "toggle_periodic_analysis":
@@ -984,10 +991,10 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("⬅️ Retour AutoTrade", callback_data="menu_autotrade"), InlineKeyboardButton("🏠 Menu Principal", callback_data="menu_back")]
         ])
         if not trades:
-            await query.edit_message_text("📈 *Positions ouvertes :*\n\nAucune position ouverte actuellement.", reply_markup=keyboard, parse_mode="Markdown")
+            await query.edit_message_text("📈 *Positions ouvertes :*\n\nAucune position ouverte actuellement.", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
             return
         lines = [f"#{t['id']} {escape_markdown(t['symbol'])} {t['direction']} qty={t['quantity']} (SL {t['sl_price']} / TP {t['tp_price']})" for t in trades]
-        await query.edit_message_text("📈 *Positions ouvertes :*\n\n" + "\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
+        await query.edit_message_text("📈 *Positions ouvertes :*\n\n" + "\n".join(lines), reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
     elif data == "menu_trading_config":
         config = get_config(user_id)
@@ -1029,7 +1036,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Testnet : {'OUI' if config.testnet else 'NON — argent réel'}\n\n"
             f"Utilise les boutons ci-dessous pour consulter les réglages. Les modifications sensibles passent par les commandes PIN documentées dans /help.",
             reply_markup=keyboard,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.MARKDOWN
         )
 
     elif data == "menu_leverage":
@@ -1050,7 +1057,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"⚡ *Levier actuel : x{config.leverage}*\n\nChoisis une nouvelle valeur (ou /setleverage <n> pour une valeur précise, jusqu'à x125).",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data.startswith("set_leverage_"):
@@ -1071,7 +1078,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"📊 *Risque par trade actuel : {config.risk_per_trade}%*\n\nChoisis une nouvelle valeur (ou /setrisk <pourcentage> pour une valeur précise, jusqu'à 20%).",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data.startswith("set_risk_"):
@@ -1092,7 +1099,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"🎯 *Max positions simultanées actuel : {config.max_positions}*\n\nCommande protégée : /setmaxpos <1-10> <code>.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data.startswith("set_maxpos_"):
@@ -1113,7 +1120,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"🧠 *Score minimum actuel pour exécuter un signal : {config.min_score}*\n\nCommande protégée : /setminscore <0-100> <code>.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data.startswith("set_minscore_"):
@@ -1138,7 +1145,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"Commande protégée : /settrailing <on|off> [pct] <code> ou /settrailing pct <pct> <code>.\n"
             f"Note : le déplacement automatique d’ordre stop futures n’est pas disponible.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "toggle_trailing":
@@ -1159,7 +1166,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"✅ *Whitelist AutoTrade*\n\n{wl}\n\n"
             f"Utilise /whitelist <add|remove|clear> <SYMBOLE> <code>.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "menu_blacklist":
@@ -1172,7 +1179,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"🚫 *Blacklist AutoTrade*\n\n{bl}\n\n"
             f"Utilise /blacklist <add|remove|clear> <SYMBOLE> <code>.",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "menu_pnl":
@@ -1201,7 +1208,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
             f"PnL cumulé : {pnl_sum:.2f} USDT\n"
             f"Win rate : {winrate:.1f}%",
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "menu_history_trades":
@@ -1229,7 +1236,7 @@ async def trading_callback_router(update: Update, context: ContextTypes.DEFAULT_
         for symbol, direction, pnl, reason, closed_at in rows:
             emoji = "🟢" if (pnl or 0) >= 0 else "🔴"
             lines.append(f"{emoji} `{escape_markdown(symbol)}` {direction} — {pnl:.2f} USDT ({reason})")
-        await query.edit_message_text("\n".join(lines), reply_markup=keyboard, parse_mode="Markdown")
+        await query.edit_message_text("\n".join(lines), reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
     elif data.startswith("manual_trade_cancel_"):
         token = data.replace("manual_trade_cancel_", "")

@@ -257,9 +257,17 @@ def open_position(
         step_size = filters.get("LOT_SIZE", {}).get("stepSize") or filters.get(
             "MARKET_LOT_SIZE", {}
         ).get("stepSize", "0.001")
+        min_qty = float(filters.get("LOT_SIZE", {}).get("minQty") or filters.get("MARKET_LOT_SIZE", {}).get("minQty", "0.0"))
+        min_notional = float(filters.get("MIN_NOTIONAL", {}).get("notional") or filters.get("NOTIONAL", {}).get("minNotional", "0.0"))
+
         quantity = round_step_size(quantity, step_size)
-        if quantity <= 0:
-            raise BinanceClientError("Quantité calculée trop faible (< step size Binance).")
+        if quantity <= 0 or (min_qty > 0 and quantity < min_qty):
+            raise BinanceClientError(f"Quantité calculée ({quantity}) trop faible par rapport aux règles Binance (minQty: {min_qty}).")
+
+        price_for_notional = get_price(user_id, symbol, market_type)
+        notional = quantity * price_for_notional
+        if min_notional > 0 and notional < min_notional:
+            raise BinanceClientError(f"Valeur notionnelle ({notional:.2f} USDT) inférieure au minimum requis par Binance ({min_notional:.2f} USDT).")
 
         result = {"quantity": quantity}
 

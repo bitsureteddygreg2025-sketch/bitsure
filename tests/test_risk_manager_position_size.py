@@ -51,7 +51,8 @@ class PositionSizeExposureTests(unittest.TestCase):
 
     def test_spot_exposure_cap_remains_unleveraged(self):
         config = TradingConfig(user_id=1, market_type="spot", leverage=50, risk_per_trade=1.0)
-        with patch.object(risk_manager, "get_account_balance", return_value=4525.82):
+        with patch.object(risk_manager, "get_account_balance", return_value=4525.82), \
+             patch.object(risk_manager, "get_available_balance", return_value=4525.82):
             quantity = risk_manager.calculate_position_size(
                 user_id=1,
                 config=config,

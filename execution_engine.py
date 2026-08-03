@@ -224,9 +224,9 @@ async def process_signal_for_user(context: ContextTypes.DEFAULT_TYPE, signal: di
     user_id = signal["user_id"]
     config = get_config(user_id)
 
-    allowed, _reason = validate_signal_for_execution(user_id, signal, config)
+    allowed, reason = validate_signal_for_execution(user_id, signal, config)
     if not allowed:
-        mark_signal_status(signal["id"], "skipped")
+        mark_signal_refused(signal["id"], reason or "Validation refusée")
         return
 
     if config.auto_trade:

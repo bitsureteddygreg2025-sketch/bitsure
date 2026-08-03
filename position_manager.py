@@ -364,8 +364,8 @@ def close_trade_manual(trade_id: int, user_id: int) -> dict:
             None,
         )
         if not remote:
-            engage_safe_mode(user_id, f"Fermeture refusée: position Binance non conforme pour trade {trade_id}")
-            raise ValueError("Fermeture refusée: position Binance correspondante introuvable ou taille différente.")
+            log_error(logger, user_id, "close_trade_manual", f"Position Binance non conforme pour trade {trade_id}")
+            raise ValueError("Fermeture refusée: position Binance correspondante introuvable sur le compte ou taille différente.")
 
     current_price = get_price(user_id, trade["symbol"], trade["market_type"])
     close_position(user_id, trade["symbol"], trade["direction"], trade["quantity"], trade["market_type"], execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)

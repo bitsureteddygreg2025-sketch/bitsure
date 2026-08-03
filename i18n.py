@@ -270,7 +270,7 @@ TEXTS = {
         "learn_spread": "*Écart de prix*\nDifférence entre prix acheteur et vendeur.",
 
         # ----- Paramètres -----
-        "settings_title": "*⚙️ Vos paramètres actuels*",
+        "settings_title": "⚙️ Vos paramètres actuels",
         'settings_timeframe': '⏱️ Timeframe',
         'settings_style': '🎯 Style de trading',
         'settings_lang': '🌐 Langue',
@@ -688,7 +688,7 @@ TEXTS = {
         "learn_spread": "*Price gap*\nDifference between buyer and seller prices.",
 
         # ----- Settings -----
-        "settings_title": "*⚙️ Your current settings*",
+        "settings_title": "⚙️ Your current settings",
         'settings_timeframe': '⏱️ Timeframe',
         'settings_style': '🎯 Trading Style',
         'settings_lang': '🌐 Language',

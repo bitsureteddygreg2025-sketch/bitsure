@@ -45,7 +45,7 @@ def _parse_live_order_args(args: list[str]) -> dict:
         raise ValueError("Paramètres insuffisants.")
 
     parsed = {
-        "symbol": normalize_symbol(args[0].upper()),
+        "symbol": normalize_symbol(args[0]),
         "amount": _parse_float(args[1], "Montant"),
         "sl_price": _parse_float(args[2], "Stop loss"),
         "tp_price": _parse_float(args[3], "Take profit"),

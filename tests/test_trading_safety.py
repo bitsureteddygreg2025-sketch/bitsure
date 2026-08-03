@@ -164,12 +164,10 @@ class TradingSafetyTests(unittest.TestCase):
 
         with patch.object(position_manager, "get_connection", return_value=Conn()), \
              patch.object(position_manager, "get_open_binance_positions", return_value=[]), \
-             patch.object(position_manager, "engage_safe_mode") as safe_mode, \
              patch.object(position_manager, "close_position") as close_position:
             with self.assertRaises(ValueError):
                 position_manager.close_trade_manual(1, 42)
 
-        safe_mode.assert_called_once()
         close_position.assert_not_called()
 
     def test_update_config_preserves_enabled_states(self):

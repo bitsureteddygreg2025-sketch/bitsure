@@ -703,14 +703,15 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callb
     if await handle_pending_alert_input(update, context):
         return
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "analyse_usage"), parse_mode=ParseMode.MARKDOWN)
         return
-    if not is_valid_symbol(symbol):
-        await respond(update, get_text(lang, "symbole_invalide"))
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
-    symbol = normalize_symbol(symbol)
     if from_callback:
         msg = await update.callback_query.edit_message_text(get_text(lang, "analyse_wait", symbol=symbol))
     else:
@@ -847,14 +848,15 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callbac
     if await handle_pending_alert_input(update, context):
         return
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "price_usage"), parse_mode=ParseMode.MARKDOWN)
         return
-    if not is_valid_symbol(symbol):
-        await respond(update, get_text(lang, "symbole_invalide"))
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
-    symbol = normalize_symbol(symbol)
     price_data = await fetcher.get_realtime_price(symbol, force_fresh=True)
     if price_data:
         text = get_text(lang, "price_format", symbol=symbol, price=format_number(price_data['price']), bid=format_number(price_data['bid']), ask=format_number(price_data['ask']))
@@ -874,7 +876,11 @@ async def alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
         await update.message.reply_text(get_text(lang, "alert_usage"))
         return
-    symbol = normalize_symbol(context.args[0])
+    try:
+        symbol = normalize_symbol(context.args[0])
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
     cond = context.args[1].lower()
     try:
         price = float(context.args[2])
@@ -927,9 +933,14 @@ async def delalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @check_limit
 async def addwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "addwatch_usage"))
+        return
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
     watchlist = user_mgr.get_watchlist(update.effective_user.id)
     if symbol in watchlist:
@@ -944,9 +955,14 @@ async def addwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @check_limit
 async def removewatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "removewatch_usage"))
+        return
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
     watchlist = user_mgr.get_watchlist(update.effective_user.id)
     if symbol not in watchlist:
@@ -964,9 +980,14 @@ async def trend(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callbac
     if await handle_pending_alert_input(update, context):
         return
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "trend_usage"), parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
     df = await fetcher.get_historical_data(symbol)
     if df is None or df.empty:
@@ -988,9 +1009,14 @@ async def volatility(update: Update, context: ContextTypes.DEFAULT_TYPE, from_ca
     if await handle_pending_alert_input(update, context):
         return
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "volatility_usage"), parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
     df = await fetcher.get_historical_data(symbol)
     if df is None or df.empty:
@@ -1004,9 +1030,14 @@ async def levels(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callba
     if await handle_pending_alert_input(update, context):
         return
     lang = get_user_lang(update)
-    symbol = context.args[0].upper() if context.args else None
-    if not symbol:
+    raw = " ".join(context.args) if context.args else None
+    if not raw:
         await respond(update, get_text(lang, "levels_usage"), parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        symbol = normalize_symbol(raw)
+    except ValueError as exc:
+        await respond(update, str(exc))
         return
     df = await fetcher.get_historical_data(symbol)
     if df is None or df.empty:
@@ -1640,7 +1671,7 @@ async def check_paper_exits(bot):
                 await bot.send_message(
                     chat_id=int(uid),
                     text=msg,
-                    parse_mode="Markdown"
+                    parse_mode=ParseMode.MARKDOWN
                 )
             except Exception as e:
                 logger.warning(f"[check_paper_exits] Notification uid={uid} échouée : {e}")
@@ -1728,16 +1759,16 @@ async def send_weekly_reports(bot):
     best = max(pcts) if pcts else 0
     worst = min(pcts) if pcts else 0
     msg = (
-        "📊 RAPPORT HEBDOMADAIRE\n━━━━━━━━━━━━━━━━━━━\n"
+        "*📊 RAPPORT HEBDOMADAIRE*\n━━━━━━━━━━━━━━━━━━━\n"
         f"📈 Signaux reçus : {len(signals)}\n"
-        f"✅ Gagnés : {wins} ({win_rate:.0f}%)\n"
-        f"📉 Meilleur : {best:+.1f}%\n"
-        f"💸 Pire : {worst:+.1f}%\n"
+        f"✅ Gagnés : *{wins}* ({win_rate:.0f}%)\n"
+        f"📉 Meilleur : `{best:+.1f}%`\n"
+        f"💸 Pire : `{worst:+.1f}%`\n"
         "💡 Conseil : attends un score > 70"
     )
     for uid in pro_users:
         try:
-            await bot.send_message(chat_id=uid, text=msg)
+            await bot.send_message(chat_id=uid, text=msg, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.warning(f"Weekly report failed for {uid}: {e}")
 

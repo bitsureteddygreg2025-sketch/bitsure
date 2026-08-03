@@ -45,7 +45,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pro_row = user_mgr.conn.execute("SELECT COUNT(*) as c FROM users WHERE role='pro'").fetchone()
     pro = pro_row["c"] if pro_row else 0
     
-    text = f"📊 *Bitsure Teddy Stats*\n👥 Utilisateurs : {total}\n🧪 Testeurs : {free}\n💎 PRO : {pro}\n\n"
+    # Santé & Watchdog
+    from health_monitor import get_last_health_status
+    hs = get_last_health_status()
+    db_status = "✅ OK" if hs.get("db_ok", True) else "❌ DOWN"
+    sched_status = "✅ Active" if hs.get("scheduler_running", True) else "❌ STOPPED"
+    text = (
+        f"📊 *Bitsure Teddy Stats*\n"
+        f"🖥️ DB: {db_status} | Watchdog Scheduler: {sched_status}\n"
+        f"👥 Utilisateurs : {total}\n🧪 Testeurs : {free}\n💎 PRO : {pro}\n\n"
+    )
     
     # Détail par utilisateur
     users = user_mgr.conn.execute("SELECT user_id, role, username FROM users ORDER BY role, user_id").fetchall()
