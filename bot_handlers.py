@@ -33,7 +33,7 @@ history_mgr = HistoryManager.get_instance()
 weekly_scheduler = None
 
 SYMBOLS_12 = [
-    "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY",
+    "BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY",
     "AUDUSD", "XAUUSD", "AAPL", "TSLA", "NVDA"
 ]
 

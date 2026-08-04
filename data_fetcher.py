@@ -26,7 +26,7 @@ class DataFetcher:
         self.price_cache = {}
         self.history_cache = {}
         self.subscribed_symbols = set([
-            "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY",
+            "BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY",
             "AUDUSD", "XAUUSD", "AAPL", "TSLA", "NVDA"
         ])
         self.ws = None
