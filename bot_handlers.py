@@ -297,6 +297,9 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cmd.startswith("settimeframe_"):
             tf = cmd.split("_", 1)[1]
             user_mgr.set_setting(update.effective_user.id, "timeframe", tf)
+            # Sync to trading_config so AutoTrade/Periodic analysis uses the same timeframe
+            from trading_config import update_config as _update_config
+            _update_config(update.effective_user.id, analysis_timeframe=tf)
             style = user_mgr.get_setting(update.effective_user.id, "trading_style", "day")
             await send_settings_menu(lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
@@ -309,6 +312,14 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif style == "scalping_15m":
                 user_mgr.set_setting(update.effective_user.id, "timeframe", "15m")
             tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+            # Sync to trading_config so AutoTrade/Periodic analysis uses the same style+timeframe
+            from trading_config import update_config as _update_config
+            _cfg_fields = {"trading_style": style}
+            if style == "scalping":
+                _cfg_fields["analysis_timeframe"] = "5m"
+            elif style == "scalping_15m":
+                _cfg_fields["analysis_timeframe"] = "15m"
+            _update_config(update.effective_user.id, **_cfg_fields)
             await send_settings_menu(lang, tf, style, update.effective_user.id, query.message.reply_text, edit_fn=safe_edit)
             return
 
@@ -989,7 +1000,8 @@ async def trend(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callbac
     except ValueError as exc:
         await respond(update, str(exc))
         return
-    df = await fetcher.get_historical_data(symbol)
+    tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+    df = await fetcher.get_historical_data(symbol, timeframe=tf)
     if df is None or df.empty:
         await respond(update, get_text(lang, "trend_no_data"))
         return
@@ -1018,7 +1030,8 @@ async def volatility(update: Update, context: ContextTypes.DEFAULT_TYPE, from_ca
     except ValueError as exc:
         await respond(update, str(exc))
         return
-    df = await fetcher.get_historical_data(symbol)
+    tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+    df = await fetcher.get_historical_data(symbol, timeframe=tf)
     if df is None or df.empty:
         await respond(update, get_text(lang, "trend_no_data"))
         return
@@ -1039,7 +1052,8 @@ async def levels(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callba
     except ValueError as exc:
         await respond(update, str(exc))
         return
-    df = await fetcher.get_historical_data(symbol)
+    tf = user_mgr.get_setting(update.effective_user.id, "timeframe", DEFAULT_TIMEFRAME)
+    df = await fetcher.get_historical_data(symbol, timeframe=tf)
     if df is None or df.empty:
         await respond(update, get_text(lang, "levels_no_data"))
         return
@@ -1179,6 +1193,14 @@ async def setstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_mgr.set_setting(user_id, "timeframe", "5m")
             elif style == "scalping_15m":
                 user_mgr.set_setting(user_id, "timeframe", "15m")
+            # Sync to trading_config so AutoTrade/Periodic analysis uses the same style+timeframe
+            from trading_config import update_config as _update_config
+            _cfg_fields = {"trading_style": style}
+            if style == "scalping":
+                _cfg_fields["analysis_timeframe"] = "5m"
+            elif style == "scalping_15m":
+                _cfg_fields["analysis_timeframe"] = "15m"
+            _update_config(user_id, **_cfg_fields)
             style_names = {"day": "📊 Day Trader (1h)", "swing": "📈 Swing Trader (4h)", "position": "🏦 Position Trader (1d)", "scalping": "Scalping (5m)", "scalping_15m": "Scalping (15m)"}
             await respond(update, f"✅ Style de trading mis à jour : *{style_names.get(style, style)}*", parse_mode=ParseMode.MARKDOWN)
             return
@@ -1205,6 +1227,9 @@ async def settimeframe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await respond(update, get_text(lang, "settimeframe_invalid"))
         return
     user_mgr.set_setting(update.effective_user.id, "timeframe", tf)
+    # Sync to trading_config so AutoTrade/Periodic analysis uses the same timeframe
+    from trading_config import update_config as _update_config
+    _update_config(update.effective_user.id, analysis_timeframe=tf)
     await respond(update, get_text(lang, "settimeframe_success", tf=tf))
 
 @check_limit
