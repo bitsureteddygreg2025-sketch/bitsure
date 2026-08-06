@@ -117,6 +117,9 @@ class DataFetcher:
 
     def get_cached_price(self, symbol: str) -> Optional[Dict]:
         symbol = normalize_symbol(symbol)
+        # Pas de cache pour les actifs Binance : prix toujours en temps réel
+        if symbol.endswith("USDT"):
+            return None
         if symbol in self.price_cache:
             if time.time() - self.price_cache[symbol]["timestamp"] < PRICE_CACHE_TTL:
                 return self.price_cache[symbol]
@@ -124,6 +127,9 @@ class DataFetcher:
 
     async def get_realtime_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
         symbol = normalize_symbol(symbol)
+        # Actifs Binance : toujours en temps réel, pas de cache
+        if symbol.endswith("USDT"):
+            return await self._fetch_price(symbol)
         if not force_fresh:
             cached = self.get_cached_price(symbol)
             if cached:
@@ -134,8 +140,8 @@ class DataFetcher:
         return price
 
     async def _fetch_price(self, symbol: str) -> Optional[Dict]:
-        # 1. Essayer Binance pour les paires USDT (BTCUSDT, ETHUSDT, etc.)
-        if symbol.endswith("USDT") or symbol in ["BTCUSDT", "ETHUSDT"]:
+        # 1. Binance REST public — source unique pour tous les actifs USDT
+        if symbol.endswith("USDT"):
             try:
                 url = f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={symbol}"
                 r = requests.get(url, timeout=5)
@@ -147,6 +153,8 @@ class DataFetcher:
                     return {"price": price, "bid": bid, "ask": ask, "timestamp": time.time()}
             except Exception as e:
                 logger.warning(f"Binance Price error {symbol}: {e}")
+            # Pas de repli TwelveData pour un actif Binance
+            return None
 
         # 2. Repli / Source Twelve Data pour les autres symboles
         if not TWELVEDATA_API_KEY:
@@ -171,6 +179,10 @@ class DataFetcher:
 
     async def get_historical_data(self, symbol: str, timeframe: str = DEFAULT_TIMEFRAME, period: str = HISTORY_PERIOD) -> Optional[pd.DataFrame]:
         symbol = normalize_symbol(symbol)
+        # Actifs Binance : pas de cache — données toujours fraîches à la demande
+        if symbol.endswith("USDT"):
+            return await self._fetch_history(symbol, timeframe)
+        # Actifs TwelveData : cache conservé pour respecter les quotas API
         key = cache_key(symbol, timeframe, period)
         if key in self.history_cache and time.time() - self.history_cache[key]["timestamp"] < HISTORY_CACHE_TTL:
             return self.history_cache[key]["data"]
@@ -181,35 +193,19 @@ class DataFetcher:
         return None
 
     async def _fetch_history(self, symbol: str, timeframe: str):
-        # 1. Binance pour les paires USDT (BTCUSDT, ETHUSDT...)
-        if symbol.endswith("USDT") or symbol in ["BTCUSDT", "ETHUSDT"]:
+        # 1. Binance REST public — source unique pour tous les actifs USDT
+        if symbol.endswith("USDT"):
             try:
-                binance_tf = {
-                    "1m": "1m", "5m": "5m", "15m": "15m",
-                    "1h": "1h", "4h": "4h", "1d": "1d"
-                }.get(timeframe, "1d")
-                url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={binance_tf}&limit=1000"
-                r = requests.get(url, timeout=10)
-                if r.status_code == 200:
-                    raw_data = r.json()
-                    if raw_data:
-                        records = []
-                        for k in raw_data:
-                            records.append({
-                                "Date": pd.to_datetime(k[0], unit='ms'),
-                                "Open": float(k[1]),
-                                "High": float(k[2]),
-                                "Low": float(k[3]),
-                                "Close": float(k[4]),
-                                "Volume": float(k[5])
-                            })
-                        df = pd.DataFrame(records)
-                        df.set_index("Date", inplace=True)
-                        return df
+                from binance_manager import get_klines_dataframe
+                df = get_klines_dataframe(symbol, timeframe, market_type="spot", limit=1000)
+                if df is not None and not df.empty:
+                    return df
             except Exception as e:
                 logger.warning(f"Binance History error {symbol}: {e}")
+            # Pas de repli TwelveData pour un actif Binance : évite des données incohérentes
+            return None
 
-        # 2. Twelve Data
+        # 2. TwelveData — uniquement pour les actifs hors Binance (forex, actions, matières premières)
         try:
             td_symbol = self._format_symbol(symbol)
             interval = {

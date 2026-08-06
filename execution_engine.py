@@ -403,6 +403,7 @@ async def scheduled_market_analysis(context: ContextTypes.DEFAULT_TYPE, interval
                     symbol,
                     config.analysis_timeframe,
                     market_type=config.market_type,
+                    limit=1000,  # aligné sur DataFetcher pour des indicateurs identiques
                 )
                 if df is None or df.empty:
                     errors += 1
