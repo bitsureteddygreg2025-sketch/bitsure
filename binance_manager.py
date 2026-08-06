@@ -19,6 +19,7 @@ from binance.exceptions import BinanceAPIException, BinanceOrderException
 
 from trading_config import get_binance_credentials, mark_credentials_invalid, get_config
 from trading_safety import SafetyError, assert_trading_allowed
+from utils import normalize_symbol
 
 logger = logging.getLogger("binance_manager")
 
@@ -140,6 +141,7 @@ def make_client_order_id(prefix: str, unique_key: str, max_len: int = 36) -> str
 
 
 def get_price(user_id: int, symbol: str, market_type: MarketType = "futures") -> float:
+    symbol = normalize_symbol(symbol)
     client = _client_for_user(user_id)
     try:
         if market_type == "futures":
@@ -171,6 +173,7 @@ def get_account_balance(user_id: int, asset: str = "USDT", market_type: MarketTy
 
 def get_symbol_filters(client: Client, symbol: str, market_type: MarketType) -> dict:
     """Récupère les filtres Binance (PRICE_FILTER, LOT_SIZE, etc.) du symbole."""
+    symbol = normalize_symbol(symbol)
     if market_type == "futures":
         info = client.futures_exchange_info()
     else:
@@ -205,6 +208,7 @@ def format_price_for_symbol(price: float, filters: dict) -> str:
 
 
 def set_leverage(user_id: int, symbol: str, leverage: int) -> None:
+    symbol = normalize_symbol(symbol)
     client = _client_for_user(user_id)
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
@@ -229,9 +233,11 @@ def open_position(
     Retourne un dict avec les IDs d'ordres (à stocker dans la table `trades`).
     Lève BinanceClientError en cas d'échec (message safe pour l'utilisateur).
     """
-    _assert_order_context_allowed(user_id, execution_context, require_auto_trade=True)
+    _assert_order_context_allowed(
+        user_id, execution_context, require_auto_trade=(execution_context == ORDER_CONTEXT_AUTOTRADE)
+    )
     client = _client_for_user(user_id)
-    symbol = symbol.upper()
+    symbol = normalize_symbol(symbol)
     direction = direction.upper()
 
     # Regles Spot vs Futures

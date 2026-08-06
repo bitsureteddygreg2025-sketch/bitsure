@@ -193,6 +193,45 @@ class TradingSafetyTests(unittest.TestCase):
             self.assertTrue(updated.auto_trade)
             self.assertTrue(updated.periodic_analysis_enabled)
 
+    def test_manual_trade_execution_when_autotrade_disabled(self):
+        import execution_engine
+        from binance_manager import ORDER_CONTEXT_MANUAL_AUTHENTICATED
+
+        signal = {
+            "id": "manual-token123",
+            "user_id": 42,
+            "symbol": "BTC USD",
+            "direction": "BUY",
+            "entry_price": 100.0,
+            "sl": 95.0,
+            "tp": 110.0,
+            "score": 90,
+            "created_at": time.time(),
+        }
+        # AutoTrade is False (default for manual users)
+        config = TradingConfig(user_id=42, auto_trade=False)
+
+        called_context = []
+
+        def mock_open_pos(*args, **kwargs):
+            called_context.append(kwargs.get("execution_context"))
+            return {
+                "quantity": kwargs.get("quantity", 0.1),
+                "order_id": "999",
+                "client_order_id": kwargs.get("client_order_id"),
+                "sl_order_id": "1000",
+                "tp_order_id": "1001",
+            }
+
+        with patch.object(execution_engine, "calculate_position_size", return_value=0.1), \
+             patch.object(execution_engine, "mark_signal_status", return_value=None), \
+             patch.object(execution_engine, "insert_trade_row", return_value=13), \
+             patch.object(execution_engine, "open_position", side_effect=mock_open_pos):
+            result = execution_engine.execute_signal(signal, config)
+
+        self.assertEqual(result["status"], "open")
+        self.assertEqual(called_context[0], ORDER_CONTEXT_MANUAL_AUTHENTICATED)
+
 
 if __name__ == "__main__":
     unittest.main()

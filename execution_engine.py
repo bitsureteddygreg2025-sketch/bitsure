@@ -21,6 +21,7 @@ from risk_manager import check_can_open_position, calculate_position_size
 from binance_manager import (
     open_position, get_price, get_tradable_symbols, get_klines_dataframe,
     make_client_order_id, BinanceClientError, ORDER_CONTEXT_AUTOTRADE,
+    ORDER_CONTEXT_MANUAL_AUTHENTICATED,
 )
 from history_manager import HistoryManager
 from signal_engine import SignalEngine
@@ -154,12 +155,18 @@ def _default_trade_fields(signal: dict, config: TradingConfig) -> dict:
     }
 
 
-def execute_signal(signal: dict, config: TradingConfig) -> dict:
+def execute_signal(signal: dict, config: TradingConfig, execution_context: str | None = None) -> dict:
     """
     Exécute réellement l'ordre sur Binance pour un signal donné, en calculant
     la taille de position, puis enregistre le trade en base.
     Retourne le dict de la ligne insérée (utile pour notifier l'utilisateur).
     """
+    if not execution_context:
+        if str(signal.get("id", "")).startswith("manual-") or signal.get("status") == "awaiting_confirmation":
+            execution_context = ORDER_CONTEXT_MANUAL_AUTHENTICATED
+        else:
+            execution_context = ORDER_CONTEXT_AUTOTRADE
+
     user_id = signal["user_id"]
     if signal.get("id") and not str(signal["id"]).startswith("manual-"):
         try:
@@ -195,7 +202,7 @@ def execute_signal(signal: dict, config: TradingConfig) -> dict:
             market_type=config.market_type,
             leverage=config.leverage,
             client_order_id=make_client_order_id("sig", signal["id"]),
-            execution_context=ORDER_CONTEXT_AUTOTRADE,
+            execution_context=execution_context,
         )
 
         fields.update({

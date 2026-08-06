@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from trading_config import get_config, update_config, save_binance_credentials
-from binance_manager import test_connection, get_full_account_info, BinanceClientError
+from binance_manager import test_connection, get_full_account_info, BinanceClientError, ORDER_CONTEXT_MANUAL_AUTHENTICATED
 from position_manager import get_open_trades, close_trade_manual, emergency_stop_all
 from execution_engine import execute_signal, mark_signal_status, validate_signal_for_execution, insert_trade_row
 from database import get_connection
@@ -1295,7 +1295,7 @@ async def cmd_confirmmanual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed:
         await context.bot.send_message(chat_id=user_id, text=f"❌ Ouverture refusée : {reason}")
         return
-    trade = execute_signal(signal, config)
+    trade = execute_signal(signal, config, execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
     if trade["status"] == "open":
         await context.bot.send_message(chat_id=user_id, text=f"✅ Position ouverte : {trade['symbol']} {trade['direction']} qty={trade['quantity']}")
     else:
@@ -1423,7 +1423,7 @@ async def _confirm_open_signal(query, context: ContextTypes.DEFAULT_TYPE, signal
         await query.edit_message_text(f"❌ Ouverture refusée : {reason}")
         return
 
-    trade = execute_signal(signal, config)
+    trade = execute_signal(signal, config, execution_context=ORDER_CONTEXT_MANUAL_AUTHENTICATED)
     if trade["status"] == "open":
         await query.edit_message_text(
             f"✅ Position ouverte : {trade['symbol']} {trade['direction']} qty={trade['quantity']}"
