@@ -15,8 +15,12 @@ ATR_MULTIPLIER_SL = 1.5
 RR_RATIO_TARGET = 2.0
 
 SYMBOL_CONFIGS = {
+    # Configs internes normalisées (fallback)
     "BTCUSD": {"adx_min": 23, "rsi_buy_low": 48, "rsi_buy_high": 68, "rsi_sell_low": 32, "rsi_sell_high": 52, "atr_max_pct": 5.5, "min_cond": 4},
     "ETHUSD": {"adx_min": 22, "rsi_buy_low": 47, "rsi_buy_high": 70, "rsi_sell_low": 30, "rsi_sell_high": 56, "atr_max_pct": 6.0, "min_cond": 4},
+    # Configs directes USDT (non normalisées) — calibration affinée
+    "BTCUSDT": {"adx_min": 25, "rsi_buy_low": 50, "rsi_buy_high": 65, "rsi_sell_low": 35, "rsi_sell_high": 50, "atr_max_pct": 4.5, "min_cond": 4},
+    "ETHUSDT": {"adx_min": 24, "rsi_buy_low": 50, "rsi_buy_high": 67, "rsi_sell_low": 33, "rsi_sell_high": 50, "atr_max_pct": 5.0, "min_cond": 4},
 }
 
 STYLE_CONFIG = {
@@ -52,11 +56,12 @@ CRYPTO_RULE = {
     "sl_factor": 1.25,
     "tp_factor": 1.15,
     "adx_delta": 0,
-    "min_score_delta": 0,
-    "min_rr_delta": 0.0,
-    "pullback_pct": 0.07,
+    "min_score_delta": 3,  # Score minimal plus élevé pour crypto (plus de bruit)
+    "min_rr_delta": 0.10,  # RR minimum légèrement plus élevé pour crypto
+    "pullback_pct": 0.04,  # Réduit de 7% → 4% pour éviter entrées trop tardives
     "overextension_factor": 1.20,
     "sr_buffer_factor": 1.15,
+    "atr_min_pct": 0.003,  # ATR minimum 0.3% du prix (marché actif)
 }
 
 TREND_BULLISH = "HAUSSIER"
@@ -181,13 +186,15 @@ class BacktestSignalEngine:
 
     @staticmethod
     def analyze(df: pd.DataFrame, symbol: str = "", style: str = "day") -> Dict:
-        symbol = strategy_symbol(symbol.upper())
+        raw_symbol = symbol.upper()
+        normalized = strategy_symbol(raw_symbol)
         df = BacktestSignalEngine._normalize_df(df)
         if not BacktestSignalEngine._valid_df(df):
             return BacktestSignalEngine._wait("signal_insufficient_data")
 
-        asset_class, asset_rules = BacktestSignalEngine._asset_profile(symbol)
-        cfg = SYMBOL_CONFIGS.get(symbol, SYMBOL_CONFIGS["BTCUSD"]).copy()
+        asset_class, asset_rules = BacktestSignalEngine._asset_profile(raw_symbol)
+        # Cherche d'abord le symbole original (ex: BTCUSDT), puis normalisé (BTCUSD)
+        cfg = SYMBOL_CONFIGS.get(raw_symbol, SYMBOL_CONFIGS.get(normalized, SYMBOL_CONFIGS["BTCUSD"])).copy()
         cfg["adx_min"] = max(1, int(cfg["adx_min"] + asset_rules["adx_delta"]))
 
         close, high, low = df["Close"], df["High"], df["Low"]
@@ -314,6 +321,37 @@ class BacktestSignalEngine:
         signal = "BUY" if sum(buy_cond) >= min_cond else "SELL" if sum(sell_cond) >= min_cond else "WAIT"
         if signal == "WAIT":
             return BacktestSignalEngine._wait("signal_wait_neutral", indicators, params_used=params_used)
+
+        # ── Filtre régime ATR minimal (marché trop plat) ──────────────────────
+        atr_min_pct = asset_rules.get("atr_min_pct", 0.0)
+        if atr_min_pct > 0 and price > 0:
+            atr_ratio_current = atr_val / price
+            if atr_ratio_current < atr_min_pct:
+                return BacktestSignalEngine._wait(
+                    f"Market too flat — ATR {atr_ratio_current*100:.3f}% < {atr_min_pct*100:.3f}% min",
+                    indicators, params_used=params_used
+                )
+
+        # ── Filtre MTF hard : blocage si 4h ET 1d sont contra-tendance ────────
+        # Ce filtre est plus fort que le modifier de score : il bloque le signal
+        # quand au moins 2 timeframes supérieurs confirment la direction opposée.
+        timeframe_trends = indicators.get("timeframe_trends", {})
+        tf_4h = timeframe_trends.get("4h", TREND_NEUTRAL)
+        tf_1d = timeframe_trends.get("1d", TREND_NEUTRAL)
+        if signal == "BUY":
+            contra_count = sum(1 for t in [tf_4h, tf_1d] if t == TREND_BEARISH)
+            if contra_count >= 2:
+                return BacktestSignalEngine._wait(
+                    f"MTF hard block — 4h={tf_4h} 1d={tf_1d} contra BUY",
+                    indicators, params_used=params_used
+                )
+        elif signal == "SELL":
+            contra_count = sum(1 for t in [tf_4h, tf_1d] if t == TREND_BULLISH)
+            if contra_count >= 2:
+                return BacktestSignalEngine._wait(
+                    f"MTF hard block — 4h={tf_4h} 1d={tf_1d} contra SELL",
+                    indicators, params_used=params_used
+                )
         if atr_val > 0 and len(indicators.get("close_vals", [])) >= 6:
             recent_move = (price - indicators["close_vals"][-6]) / atr_val
             limit = {"scalping": 1.4, "scalping_15m": 1.6, "day": 2.0, "swing": 2.5, "position": 3.0}.get(style, 2.0) * asset_rules.get("overextension_factor", 1.0)

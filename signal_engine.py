@@ -52,15 +52,17 @@ BUFFER_MULTIPLIERS = {
 
 ASSET_CLASS_RULES = {
     "crypto": {
-        "symbols": {"BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "DOGEUSD"},
+        "symbols": {"BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "DOGEUSD",
+                    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"},
         "sl_factor": 1.25,
         "tp_factor": 1.15,
         "adx_delta": 0,
-        "min_score_delta": 0,
-        "min_rr_delta": 0.0,
-        "pullback_pct": 0.07,
+        "min_score_delta": 3,  # Score minimal plus élevé pour crypto (plus de bruit)
+        "min_rr_delta": 0.10,  # RR minimum légèrement plus élevé pour crypto
+        "pullback_pct": 0.04,  # Réduit de 7% → 4% pour éviter entrées trop tardives
         "overextension_factor": 1.20,
         "sr_buffer_factor": 1.15,
+        "atr_min_pct": 0.003,  # ATR minimum 0.3% du prix (marché actif)
     },
     "forex": {
         "symbols": {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"},
@@ -733,7 +735,41 @@ class SignalEngine:
                 params_used=params_used,
             )
 
-        # ── 1.5 Filtre de sur-extension (anti-chasing) ─────────────────────
+        # ── 1.5 Filtre régime ATR minimal (marché trop plat) ────────────────────
+        atr_min_pct = asset_rules.get("atr_min_pct", 0.0)
+        if atr_min_pct > 0 and price > 0:
+            atr_ratio_now = atr_val / price
+            if atr_ratio_now < atr_min_pct:
+                return SignalEngine._wait(
+                    lang,
+                    f"Market too flat — ATR {atr_ratio_now*100:.3f}% < {atr_min_pct*100:.3f}% min",
+                    indicators, asset_class=asset_class, params_used=params_used
+                )
+
+        # ── 1.6 Filtre MTF hard : blocage si 4h ET 1d sont contra-tendance ────
+        # Plus fort que le modifier de score : bloque le signal quand
+        # au moins 2 timeframes supérieurs confirment la direction opposée.
+        timeframe_trends = indicators.get("timeframe_trends", {})
+        tf_4h = timeframe_trends.get("4h", TREND_NEUTRAL)
+        tf_1d = timeframe_trends.get("1d", TREND_NEUTRAL)
+        if signal == "BUY":
+            contra_count = sum(1 for t in [tf_4h, tf_1d] if t == TREND_BEARISH)
+            if contra_count >= 2:
+                return SignalEngine._wait(
+                    lang,
+                    f"MTF hard block — 4h={tf_4h} 1d={tf_1d} contra BUY",
+                    indicators, asset_class=asset_class, params_used=params_used
+                )
+        elif signal == "SELL":
+            contra_count = sum(1 for t in [tf_4h, tf_1d] if t == TREND_BULLISH)
+            if contra_count >= 2:
+                return SignalEngine._wait(
+                    lang,
+                    f"MTF hard block — 4h={tf_4h} 1d={tf_1d} contra SELL",
+                    indicators, asset_class=asset_class, params_used=params_used
+                )
+
+        # ── 1.7 Filtre de sur-extension (anti-chasing) ─────────────────────
         if signal in ("BUY", "SELL") and atr_val > 0:
             close_vals = indicators.get("close_vals", [])
             if len(close_vals) < 6:
